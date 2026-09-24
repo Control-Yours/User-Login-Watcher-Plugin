@@ -1,0 +1,8 @@
+# Built release zips are attached to GitHub Releases, not committed.
+dist/
+
+.DS_Store
+Thumbs.db
+
+# Files the Claude desktop app saves beside the repo.
+Claude outputs/
