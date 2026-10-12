@@ -1,7 +1,7 @@
 === CY User Login Watcher ===
 Contributors: controlyours
 Requires at least: 6.0
-Tested up to: 7.1
+Tested up to: 7.1.3
 Requires PHP: 7.4
 Stable tag: 1.0.0
 License: GPL-2.0-or-later
@@ -51,7 +51,7 @@ Constant `CY_ULW_UPDATE_MANIFEST` (define in wp-config.php) — point a site at 
 
 == Updates ==
 
-The plugin header declares `Update URI: https://github.com/rob460/User-Login-Watcher-Plugin`, so WordPress never asks wordpress.org about it. Instead it reads `update.json` from the repository's `main` branch and installs the zip attached to the matching GitHub Release. Releases are produced with `bin/release.sh` in the repository; see its README.
+The plugin header declares `Update URI: https://github.com/Control-Yours/User-Login-Watcher-Plugin`, so WordPress never asks wordpress.org about it. Instead it reads `update.json` from the repository's `main` branch and installs the zip attached to the matching GitHub Release. Releases are produced with `bin/release.sh` in the repository; see its README.
 
 == Installation ==
 
@@ -59,6 +59,10 @@ The plugin header declares `Update URI: https://github.com/rob460/User-Login-Wat
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.0.1 =
+* Repository moved to the Control-Yours GitHub organization; updates now come from Control-Yours/User-Login-Watcher-Plugin.
+* Declare testing against WordPress 7.1.3.
 
 = 1.0.0 =
 * Initial release.

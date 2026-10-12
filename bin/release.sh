@@ -18,7 +18,7 @@
 set -euo pipefail
 
 SLUG="cy-user-login-watcher"
-REPO="rob460/User-Login-Watcher-Plugin"
+REPO="Control-Yours/User-Login-Watcher-Plugin"
 BRANCH="main"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

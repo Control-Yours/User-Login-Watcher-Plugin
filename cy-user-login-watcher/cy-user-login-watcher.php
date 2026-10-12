@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       CY User Login Watcher
- * Plugin URI:        https://github.com/rob460/User-Login-Watcher-Plugin
+ * Plugin URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
  * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only.
  * Version:           1.0.0
  * Requires at least: 6.0
@@ -11,7 +11,7 @@
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       cy-user-login-watcher
- * Update URI:        https://github.com/rob460/User-Login-Watcher-Plugin
+ * Update URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
  *
  * @package CY_User_Login_Watcher
  */
@@ -39,7 +39,7 @@ define( 'CY_ULW_DIR', __DIR__ );
 define( 'CY_ULW_SLUG', 'cy-user-login-watcher' );
 
 /** GitHub repository that hosts releases and the update manifest (owner/repo). */
-define( 'CY_ULW_GITHUB_REPO', 'rob460/User-Login-Watcher-Plugin' );
+define( 'CY_ULW_GITHUB_REPO', 'Control-Yours/User-Login-Watcher-Plugin' );
 
 /**
  * Records login and activity timestamps. This is the only code that runs on
