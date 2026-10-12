@@ -60,6 +60,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 
 == Changelog ==
 
+= 1.0.2 =
+* Record logins made through One-Time Login links, which bypass the standard WordPress login hook.
+
 = 1.0.1 =
 * Repository moved to the Control-Yours GitHub organization; updates now come from Control-Yours/User-Login-Watcher-Plugin.
 * Declare testing against WordPress 7.1.3.

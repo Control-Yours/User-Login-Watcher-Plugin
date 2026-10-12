@@ -72,6 +72,8 @@ final class CY_ULW_Tracker {
 	 */
 	public static function init() {
 		add_action( 'wp_login', array( __CLASS__, 'record_login' ), 10, 2 );
+		// One-Time Login (one_time_login plugin) signs users in without firing wp_login.
+		add_action( 'one_time_login_logged_in', array( __CLASS__, 'record_one_time_login' ) );
 		add_action( 'admin_init', array( __CLASS__, 'maybe_record_activity' ), 1 );
 		add_action( 'rest_api_init', array( __CLASS__, 'maybe_record_activity' ), 1 );
 	}
@@ -103,6 +105,17 @@ final class CY_ULW_Tracker {
 		 * @param WP_User $user      User object.
 		 */
 		do_action( 'cy_ulw_login_recorded', $user->ID, $now, $user );
+	}
+
+	/**
+	 * Record a login made through a One-Time Login link, which bypasses wp_login.
+	 *
+	 * @param WP_User $user User object passed by the one_time_login_logged_in action.
+	 */
+	public static function record_one_time_login( $user ) {
+		if ( $user instanceof WP_User ) {
+			self::record_login( $user->user_login, $user );
+		}
 	}
 
 	/**
