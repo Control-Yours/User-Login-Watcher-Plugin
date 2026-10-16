@@ -41,6 +41,43 @@ define( 'CY_ULW_SLUG', 'cy-user-login-watcher' );
 /** GitHub repository that hosts releases and the update manifest (owner/repo). */
 define( 'CY_ULW_GITHUB_REPO', 'Control-Yours/User-Login-Watcher-Plugin' );
 
+/** Option holding the settings from Settings > Login Watcher (one small autoloaded array). */
+define( 'CY_ULW_SETTINGS_OPTION', 'cy_ulw_settings' );
+
+/**
+ * Default settings.
+ *
+ * @return array
+ */
+function cy_ulw_default_settings() {
+	return array(
+		'excluded_roles'   => array( 'subscriber', 'customer' ),
+		'view_roles'       => array( 'administrator' ),
+		'activity_minutes' => 15,
+	);
+}
+
+/**
+ * Saved settings merged over the defaults.
+ *
+ * @return array
+ */
+function cy_ulw_settings() {
+	$saved = get_option( CY_ULW_SETTINGS_OPTION );
+	return array_merge( cy_ulw_default_settings(), is_array( $saved ) ? $saved : array() );
+}
+
+/**
+ * One setting.
+ *
+ * @param string $key Setting key.
+ * @return mixed
+ */
+function cy_ulw_setting( $key ) {
+	$settings = cy_ulw_settings();
+	return isset( $settings[ $key ] ) ? $settings[ $key ] : null;
+}
+
 /**
  * Records login and activity timestamps. This is the only code that runs on
  * front-end requests.
@@ -160,7 +197,7 @@ final class CY_ULW_Tracker {
 		 * @param int $seconds Default 900 (15 minutes).
 		 * @param int $user_id User ID.
 		 */
-		$throttle = (int) apply_filters( 'cy_ulw_activity_throttle', self::DEFAULT_THROTTLE, $user_id );
+		$throttle = (int) apply_filters( 'cy_ulw_activity_throttle', max( 1, (int) cy_ulw_setting( 'activity_minutes' ) ) * MINUTE_IN_SECONDS, $user_id );
 
 		$now  = time();
 		$last = (int) get_user_meta( $user_id, self::META_LAST_ACTIVE, true );
@@ -199,9 +236,9 @@ final class CY_ULW_Tracker {
 		 * Filter the roles that are not tracked. A user is skipped only when
 		 * every role they hold is in this list.
 		 *
-		 * @param string[] $roles Default array( 'subscriber', 'customer' ).
+		 * @param string[] $roles Default: the "Roles not tracked" setting (subscriber and customer unless changed).
 		 */
-		$roles = apply_filters( 'cy_ulw_excluded_roles', array( 'subscriber', 'customer' ) );
+		$roles = apply_filters( 'cy_ulw_excluded_roles', (array) cy_ulw_setting( 'excluded_roles' ) );
 		return array_values( array_filter( array_map( 'strval', (array) $roles ) ) );
 	}
 
@@ -248,6 +285,8 @@ CY_ULW_Tracker::init();
 if ( is_admin() && ! wp_doing_ajax() ) {
 	require_once CY_ULW_DIR . '/includes/class-cy-ulw-admin.php';
 	CY_ULW_Admin::init();
+	require_once CY_ULW_DIR . '/includes/class-cy-ulw-settings.php';
+	CY_ULW_Settings::init();
 }
 
 // Updater: needed wherever WordPress checks for or installs plugin updates —

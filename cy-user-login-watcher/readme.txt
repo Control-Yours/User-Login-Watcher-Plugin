@@ -17,10 +17,10 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Records a throttled "last active" timestamp whenever a logged-in user loads an admin screen, admin-ajax request or REST request. Heartbeat pings from idle tabs are ignored, so a tab left open does not count as activity. This matters because WordPress keeps users logged in for up to 14 days with "Remember Me", so the login timestamp alone can under-report activity.
 * Adds a sortable **Last Login** column to Users > All Users (and Network Admin > Users on multisite). Hover for the exact date/time. Users who have never logged in since activation are labelled and sort to the bottom rather than disappearing.
 * Adds a **Recent Logins** widget to the Dashboard listing the ten most recent logins, plus a count of users who have not logged in since tracking began.
-* Column and widget are only shown to users with `manage_options` (administrators). Editors and other client roles never see them.
+* Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
 * Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
 * Updates itself from GitHub Releases through the normal WordPress updates screen.
-* No settings screen. No front-end output. No database tables. No cron events. No autoloaded options.
+* One small settings screen (Settings > Login Watcher): roles not tracked, roles that can see login data, activity update interval. No front-end output. No database tables. No cron events. One small autoloaded option.
 
 == Performance ==
 
@@ -34,6 +34,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * User meta `_cy_ulw_last_login` — Unix timestamp (UTC) of the last login.
 * User meta `_cy_ulw_last_active` — Unix timestamp (UTC) of the last recorded admin/REST activity, written at most once every 15 minutes per user.
 * Option `cy_ulw_installed` (not autoloaded) — Unix timestamp of activation, used to qualify "No login recorded".
+* Option `cy_ulw_settings` (autoloaded, a few bytes) — the three settings from Settings > Login Watcher. Filters below take precedence over it.
 * Site transient `cy_ulw_update_manifest` — cached update manifest.
 
 Deleting the plugin from the Plugins screen removes all of the above. Deactivating leaves the data in place.
@@ -60,6 +61,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.1.0 =
+* New Settings > Login Watcher screen: tick which roles are not tracked (default Subscriber and Customer), which roles may see the Last Login column and Recent Logins widget (administrators always can), and how often "last active" refreshes. A Settings link appears on the Plugins row. The code filters still work and override the screen.
 
 = 1.0.3 =
 * Only users who work in the site are tracked: anyone whose only roles are Subscriber or WooCommerce Customer is skipped, shows "Not tracked" in the Users column, and is left out of the Dashboard widget count. Filter `cy_ulw_excluded_roles` adjusts the list per site.

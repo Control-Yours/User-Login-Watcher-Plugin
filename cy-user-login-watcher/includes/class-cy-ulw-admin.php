@@ -50,7 +50,13 @@ final class CY_ULW_Admin {
 		 *
 		 * @param string $cap Default 'manage_options' ('manage_network_users' in the network admin).
 		 */
-		return current_user_can( (string) apply_filters( 'cy_ulw_view_capability', $cap ) );
+		if ( current_user_can( (string) apply_filters( 'cy_ulw_view_capability', $cap ) ) ) {
+			return true;
+		}
+
+		// Extra roles allowed by Settings > Login Watcher.
+		$user = wp_get_current_user();
+		return $user && $user->ID && (bool) array_intersect( (array) $user->roles, (array) cy_ulw_setting( 'view_roles' ) );
 	}
 
 	/* ---------------------------------------------------------------------

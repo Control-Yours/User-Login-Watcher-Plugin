@@ -17,7 +17,9 @@ delete_metadata( 'user', 0, '_cy_ulw_last_active', '', true );
 if ( is_multisite() ) {
 	foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $cy_ulw_site_id ) {
 		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_installed' );
+		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_settings' );
 	}
 } else {
 	delete_option( 'cy_ulw_installed' );
+	delete_option( 'cy_ulw_settings' );
 }
