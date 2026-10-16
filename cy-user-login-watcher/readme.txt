@@ -18,6 +18,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Adds a sortable **Last Login** column to Users > All Users (and Network Admin > Users on multisite). Hover for the exact date/time. Users who have never logged in since activation are labelled and sort to the bottom rather than disappearing.
 * Adds a **Recent Logins** widget to the Dashboard listing the ten most recent logins, plus a count of users who have not logged in since tracking began.
 * Column and widget are only shown to users with `manage_options` (administrators). Editors and other client roles never see them.
+* Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
 * Updates itself from GitHub Releases through the normal WordPress updates screen.
 * No settings screen. No front-end output. No database tables. No cron events. No autoloaded options.
 
@@ -59,6 +60,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.0.3 =
+* Only users who work in the site are tracked: anyone whose only roles are Subscriber or WooCommerce Customer is skipped, shows "Not tracked" in the Users column, and is left out of the Dashboard widget count. Filter `cy_ulw_excluded_roles` adjusts the list per site.
 
 = 1.0.2 =
 * Record logins made through One-Time Login links, which bypass the standard WordPress login hook.

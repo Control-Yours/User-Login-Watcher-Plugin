@@ -182,10 +182,44 @@ final class CY_ULW_Tracker {
 		/**
 		 * Filter whether a specific user should be tracked.
 		 *
-		 * @param bool $track   Default true.
+		 * @param bool $track   Default: false when every role the user holds is excluded, true otherwise.
 		 * @param int  $user_id User ID.
 		 */
-		return (bool) apply_filters( 'cy_ulw_track_user', true, (int) $user_id );
+		return (bool) apply_filters( 'cy_ulw_track_user', self::is_tracked_role( $user_id ), (int) $user_id );
+	}
+
+	/**
+	 * Roles whose users are not tracked by default: site visitors and shop
+	 * customers, not people who work in the admin.
+	 *
+	 * @return string[] Role slugs.
+	 */
+	public static function excluded_roles() {
+		/**
+		 * Filter the roles that are not tracked. A user is skipped only when
+		 * every role they hold is in this list.
+		 *
+		 * @param string[] $roles Default array( 'subscriber', 'customer' ).
+		 */
+		$roles = apply_filters( 'cy_ulw_excluded_roles', array( 'subscriber', 'customer' ) );
+		return array_values( array_filter( array_map( 'strval', (array) $roles ) ) );
+	}
+
+	/**
+	 * Whether a user holds at least one role that is tracked.
+	 *
+	 * Users with no role at all (for example, multisite users not added to this
+	 * site) are not tracked.
+	 *
+	 * @param int $user_id User ID.
+	 * @return bool
+	 */
+	public static function is_tracked_role( $user_id ) {
+		$user = get_userdata( (int) $user_id );
+		if ( ! $user || empty( $user->roles ) ) {
+			return false;
+		}
+		return (bool) array_diff( (array) $user->roles, self::excluded_roles() );
 	}
 
 	/**
