@@ -71,8 +71,8 @@ final class CY_ULW_Settings {
 	}
 
 	/**
-	 * Validate submitted settings. Unknown roles are dropped, the interval is
-	 * clamped to 1..1440 minutes.
+	 * Validate submitted settings. Unknown roles are dropped. The activity interval is not
+	 * exposed on the page; it keeps its default unless the cy_ulw_activity_throttle filter changes it.
 	 *
 	 * @param mixed $input Raw input.
 	 * @return array
@@ -84,12 +84,10 @@ final class CY_ULW_Settings {
 
 		$excluded = isset( $input['excluded_roles'] ) ? array_map( 'sanitize_key', (array) $input['excluded_roles'] ) : array();
 		$view     = isset( $input['view_roles'] ) ? array_map( 'sanitize_key', (array) $input['view_roles'] ) : array();
-		$minutes  = isset( $input['activity_minutes'] ) ? (int) $input['activity_minutes'] : $defaults['activity_minutes'];
 
 		return array(
 			'excluded_roles'   => array_values( array_intersect( $excluded, $known ) ),
 			'view_roles'       => array_values( array_intersect( $view, $known ) ),
-			'activity_minutes' => max( 1, min( 1440, $minutes ) ),
 		);
 	}
 
@@ -137,14 +135,6 @@ final class CY_ULW_Settings {
 								<?php endforeach; ?>
 								<p class="description"><?php esc_html_e( 'The Last Login column and the Recent Logins widget are shown to these roles. Administrators always see them.', 'cy-user-login-watcher' ); ?></p>
 							</fieldset>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="cy_ulw_activity_minutes"><?php esc_html_e( 'Activity update interval', 'cy-user-login-watcher' ); ?></label></th>
-						<td>
-							<input type="number" id="cy_ulw_activity_minutes" name="<?php echo esc_attr( CY_ULW_SETTINGS_OPTION ); ?>[activity_minutes]" value="<?php echo esc_attr( $settings['activity_minutes'] ); ?>" min="1" max="1440" step="1" class="small-text">
-							<?php esc_html_e( 'minutes', 'cy-user-login-watcher' ); ?>
-							<p class="description"><?php esc_html_e( 'How often a logged-in user\'s "last active" time is refreshed while they work in the admin. Lower is more precise and writes more often.', 'cy-user-login-watcher' ); ?></p>
 						</td>
 					</tr>
 				</table>

@@ -20,7 +20,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
 * Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
 * Updates itself from GitHub Releases through the normal WordPress updates screen.
-* One small settings screen (Settings > Login Watcher): roles not tracked, roles that can see login data, activity update interval. No front-end output. No database tables. No cron events. One small autoloaded option.
+* One small settings screen (Settings > Login Watcher): roles not tracked and roles that can see login data. No front-end output. No database tables. No cron events. One small autoloaded option.
 
 == Performance ==
 
@@ -34,7 +34,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * User meta `_cy_ulw_last_login` — Unix timestamp (UTC) of the last login.
 * User meta `_cy_ulw_last_active` — Unix timestamp (UTC) of the last recorded admin/REST activity, written at most once every 15 minutes per user.
 * Option `cy_ulw_installed` (not autoloaded) — Unix timestamp of activation, used to qualify "No login recorded".
-* Option `cy_ulw_settings` (autoloaded, a few bytes) — the three settings from Settings > Login Watcher. Filters below take precedence over it.
+* Option `cy_ulw_settings` (autoloaded, a few bytes) — the settings from Settings > Login Watcher. Filters below take precedence over it.
 * Site transient `cy_ulw_update_manifest` — cached update manifest.
 
 Deleting the plugin from the Plugins screen removes all of the above. Deactivating leaves the data in place.
@@ -61,6 +61,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.1.1 =
+* Removed the activity update interval field from the settings page; the 15-minute default stays and the `cy_ulw_activity_throttle` filter still adjusts it.
 
 = 1.1.0 =
 * New Settings > Login Watcher screen: tick which roles are not tracked (default Subscriber and Customer), which roles may see the Last Login column and Recent Logins widget (administrators always can), and how often "last active" refreshes. A Settings link appears on the Plugins row. The code filters still work and override the screen.

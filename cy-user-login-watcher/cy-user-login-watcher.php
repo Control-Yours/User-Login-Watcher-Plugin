@@ -53,7 +53,7 @@ function cy_ulw_default_settings() {
 	return array(
 		'excluded_roles'   => array( 'subscriber', 'customer' ),
 		'view_roles'       => array( 'administrator' ),
-		'activity_minutes' => 15,
+		'activity_minutes' => 15, // Not on the settings page; change with the cy_ulw_activity_throttle filter.
 	);
 }
 
