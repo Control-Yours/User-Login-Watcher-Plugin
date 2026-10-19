@@ -47,6 +47,34 @@ final class CY_ULW_Updater {
 		add_filter( 'update_plugins_github.com', array( __CLASS__, 'check_for_update' ), 10, 4 );
 		add_filter( 'plugins_api', array( __CLASS__, 'plugin_information' ), 10, 3 );
 		add_filter( 'upgrader_source_selection', array( __CLASS__, 'fix_source_folder' ), 10, 4 );
+		add_filter( 'auto_update_plugin', array( __CLASS__, 'auto_update' ), 10, 2 );
+	}
+
+	/**
+	 * Opt this plugin into WordPress background updates.
+	 *
+	 * Without this, core only lists a new release on the Plugins screen and
+	 * waits for someone to click Update. With it, the twice-daily cron check
+	 * installs the release the same way core does for plugins whose
+	 * "Enable auto-updates" toggle is on. Core's own guards still apply:
+	 * AUTOMATIC_UPDATER_DISABLED, DISALLOW_FILE_MODS, version-control
+	 * checkouts and the automatic_updater_disabled filter all win.
+	 *
+	 * Define CY_ULW_AUTO_UPDATE as false in wp-config.php to leave one site
+	 * on manual updates.
+	 *
+	 * @param bool|null $update Whether core intends to auto-update the item.
+	 * @param object    $item   Update offer; ->plugin is the plugin basename.
+	 * @return bool|null
+	 */
+	public static function auto_update( $update, $item ) {
+		if ( ! is_object( $item ) || empty( $item->plugin ) || CY_ULW_BASENAME !== $item->plugin ) {
+			return $update;
+		}
+		if ( defined( 'CY_ULW_AUTO_UPDATE' ) && ! CY_ULW_AUTO_UPDATE ) {
+			return $update;
+		}
+		return true;
 	}
 
 	/**

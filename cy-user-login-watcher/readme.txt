@@ -19,7 +19,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Adds a **Recent Logins** widget to the Dashboard listing the ten most recent logins, plus a count of users who have not logged in since tracking began.
 * Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
 * Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
-* Updates itself from GitHub Releases through the normal WordPress updates screen.
+* Updates itself from GitHub Releases. New releases are installed by the twice-daily WordPress update check without anyone clicking Update; they also appear on the normal Updates screen. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
 * One small settings screen (Settings > Login Watcher): roles not tracked and roles that can see login data. No front-end output. No database tables. No cron events. One small autoloaded option.
 
 == Performance ==
@@ -51,9 +51,11 @@ Action `cy_ulw_login_recorded( $user_id, $timestamp, $user )` fires after a logi
 
 Constant `CY_ULW_UPDATE_MANIFEST` (define in wp-config.php) — point a site at a different update manifest URL, e.g. a staging branch.
 
+Constant `CY_ULW_AUTO_UPDATE` (define in wp-config.php as `false`) — keep a site on manual updates instead of installing new releases automatically.
+
 == Updates ==
 
-The plugin header declares `Update URI: https://github.com/Control-Yours/User-Login-Watcher-Plugin`, so WordPress never asks wordpress.org about it. Instead it reads `update.json` from the repository's `main` branch and installs the zip attached to the matching GitHub Release. Releases are produced with `bin/release.sh` in the repository; see its README.
+The plugin header declares `Update URI: https://github.com/Control-Yours/User-Login-Watcher-Plugin`, so WordPress never asks wordpress.org about it. Instead it reads `update.json` from the repository's `main` branch and installs the zip attached to the matching GitHub Release. The plugin opts itself into WordPress background updates (filter `auto_update_plugin`), so a new release is installed by the next scheduled update check rather than waiting for a click; core's own switches (`AUTOMATIC_UPDATER_DISABLED`, `DISALLOW_FILE_MODS`, the `automatic_updater_disabled` filter) still disable it. Releases are produced with `bin/release.sh` in the repository; see its README.
 
 == Installation ==
 
@@ -61,6 +63,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.1.2 =
+* New releases now install themselves through WordPress background updates instead of waiting on the Plugins screen for someone to click Update. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
 
 = 1.1.1 =
 * Removed the activity update interval field from the settings page; the 15-minute default stays and the `cy_ulw_activity_throttle` filter still adjusts it.
