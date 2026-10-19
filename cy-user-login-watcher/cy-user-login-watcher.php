@@ -28,6 +28,10 @@
  *    Users column and Dashboard widget for administrators.
  *  - wp-admin, cron and WP-CLI: includes/class-cy-ulw-updater.php checks
  *    GitHub for new versions (WordPress schedules this at most hourly).
+ *  - Every request type: includes/class-cy-ulw-reporter.php registers hooks
+ *    that send logins and activity to the Control Yours Admin Dashboard as
+ *    they happen (non-blocking) and a daily snapshot from cron. It does
+ *    nothing on a front-end page view.
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -207,15 +211,27 @@ final class CY_ULW_Tracker {
 		}
 
 		update_user_meta( $user_id, self::META_LAST_ACTIVE, $now );
+
+		/**
+		 * Fires after a "last active" timestamp has been recorded.
+		 *
+		 * Throttled like the write itself: at most once per throttle window
+		 * (15 minutes by default) per user.
+		 *
+		 * @param int $user_id   User ID.
+		 * @param int $timestamp Unix timestamp (UTC).
+		 */
+		do_action( 'cy_ulw_activity_recorded', $user_id, $now );
 	}
 
 	/**
-	 * Whether a given user should be tracked.
+	 * Whether a given user should be tracked. Also used by the reporter to
+	 * decide who belongs in the daily snapshot.
 	 *
 	 * @param int $user_id User ID.
 	 * @return bool
 	 */
-	private static function should_track_user( $user_id ) {
+	public static function should_track_user( $user_id ) {
 		/**
 		 * Filter whether a specific user should be tracked.
 		 *
@@ -280,6 +296,15 @@ final class CY_ULW_Tracker {
 register_activation_hook( __FILE__, array( 'CY_ULW_Tracker', 'activate' ) );
 
 CY_ULW_Tracker::init();
+
+// Dashboard reporting. Always loaded: logins happen on wp-login.php, activity
+// on admin/ajax/REST requests and the daily snapshot on cron. Front-end page
+// views only pay for the hook registrations.
+require_once CY_ULW_DIR . '/includes/class-cy-ulw-reporter.php';
+CY_ULW_Reporter::init();
+
+register_activation_hook( __FILE__, array( 'CY_ULW_Reporter', 'activate' ) );
+register_deactivation_hook( __FILE__, array( 'CY_ULW_Reporter', 'deactivate' ) );
 
 // Admin UI: Users column + Dashboard widget. Not needed for ajax or the front end.
 if ( is_admin() && ! wp_doing_ajax() ) {

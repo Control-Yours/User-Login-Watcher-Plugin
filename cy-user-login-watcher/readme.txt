@@ -20,7 +20,8 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
 * Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
 * Updates itself from GitHub Releases. New releases are installed by the twice-daily WordPress update check without anyone clicking Update; they also appear on the normal Updates screen. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
-* One small settings screen (Settings > Login Watcher): roles not tracked and roles that can see login data. No front-end output. No database tables. No cron events. One small autoloaded option.
+* Reports to the Control Yours Admin Dashboard (admin.controlyours.com): each login and each throttled "last active" update is sent as it happens (non-blocking, so a slow or unreachable dashboard never delays a login by more than three seconds and never stops it being recorded), and a full snapshot of tracked users goes out once a day from WP-cron so the dashboard can show who has never logged in and drop users that were deleted. The site identifies itself with a random key it generated on its own and stays "pending" on the dashboard until someone approves it there; no shared secret is stored in this plugin. Untick the box under Settings > Login Watcher to stop reporting from one site, define `CY_ULW_DASHBOARD_REPORTING` as false in wp-config.php to switch it off outright, or define `CY_ULW_DASHBOARD_URL` to point a site at a different dashboard.
+* One small settings screen (Settings > Login Watcher): roles not tracked, roles that can see login data, and the dashboard reporting switch with its status. No front-end output. No database tables. One daily cron event (the dashboard snapshot). Two small autoloaded options.
 
 == Performance ==
 
@@ -28,6 +29,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Logged-in admin requests: one meta read served from the user meta cache WordPress already loaded for capability checks (no query), and one small write at most every 15 minutes per user.
 * Users screen and Dashboard: the column reads from the meta cache the list table already primed (no extra queries per row). The widget runs a handful of indexed queries and only for administrators viewing the Dashboard.
 * Update checks: piggyback on WordPress core's own schedule (cron twice daily, admin at most hourly), fetch one ~1 KB JSON file and cache it for 6 hours. Never on the front end.
+* Dashboard reporting: one small non-blocking HTTP request per login and per "last active" write (so at most one every 15 minutes per user), plus one blocking request a day from cron carrying every tracked user. Logins are recorded before the request is made and regardless of its outcome.
 
 == Data stored ==
 
@@ -35,9 +37,15 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * User meta `_cy_ulw_last_active` — Unix timestamp (UTC) of the last recorded admin/REST activity, written at most once every 15 minutes per user.
 * Option `cy_ulw_installed` (not autoloaded) — Unix timestamp of activation, used to qualify "No login recorded".
 * Option `cy_ulw_settings` (autoloaded, a few bytes) — the settings from Settings > Login Watcher. Filters below take precedence over it.
+* Option `cy_ulw_reporter` (autoloaded, under 200 bytes) — the site's random dashboard key, when a report and a snapshot were last sent, the last error, and whether reporting is switched off.
+* Cron event `cy_ulw_daily_report` (daily) — sends the user snapshot to the dashboard.
 * Site transient `cy_ulw_update_manifest` — cached update manifest.
 
-Deleting the plugin from the Plugins screen removes all of the above. Deactivating leaves the data in place.
+Deleting the plugin from the Plugins screen removes all of the above. Deactivating removes the cron event and leaves the data in place.
+
+== Sent to the dashboard ==
+
+Each report is a JSON `POST` to `https://admin.controlyours.com/api/logins/intake` with the site key in an `X-CY-Site-Key` header. It carries the site's home URL, name, WP Engine install name (when the `PWP_NAME` constant exists), plugin, WordPress and PHP versions, and for each user included: ID, username, display name, email, roles, last login and last active timestamps. Login and activity reports carry the one user; the daily snapshot carries every tracked user. Nothing else (no passwords, no content, no visitors) is sent.
 
 == Filters ==
 
@@ -46,12 +54,19 @@ Deleting the plugin from the Plugins screen removes all of the above. Deactivati
 * `cy_ulw_track_user` (bool, default `true`; receives `$user_id`) — return `false` to skip tracking for a specific user (e.g. an agency account).
 * `cy_ulw_view_capability` (string, default `manage_options`; `manage_network_users` in the network admin) — who can see the column and widget.
 * `cy_ulw_widget_count` (int, default `10`) — how many users the Dashboard widget lists.
+* `cy_ulw_reporting_enabled` (bool, default `true` unless unticked on the settings screen) — return `false` to stop reporting to the dashboard. The `CY_ULW_DASHBOARD_REPORTING` constant wins over this filter.
 
 Action `cy_ulw_login_recorded( $user_id, $timestamp, $user )` fires after a login is stored.
+
+Action `cy_ulw_activity_recorded( $user_id, $timestamp )` fires after a "last active" timestamp is stored (at most once per throttle window per user).
 
 Constant `CY_ULW_UPDATE_MANIFEST` (define in wp-config.php) — point a site at a different update manifest URL, e.g. a staging branch.
 
 Constant `CY_ULW_AUTO_UPDATE` (define in wp-config.php as `false`) — keep a site on manual updates instead of installing new releases automatically.
+
+Constant `CY_ULW_DASHBOARD_REPORTING` (define in wp-config.php as `false`) — send nothing to the Admin Dashboard from this site; the settings checkbox is then shown disabled.
+
+Constant `CY_ULW_DASHBOARD_URL` (define in wp-config.php) — send reports to a different intake URL, e.g. a local build of the dashboard.
 
 == Updates ==
 
@@ -63,6 +78,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.2.0 =
+* Reports to the Control Yours Admin Dashboard: logins and "last active" updates are sent as they happen, plus a daily snapshot of every tracked user. Each site generates its own key and waits as "pending" on the dashboard until approved there. New "Dashboard reporting" section under Settings > Login Watcher with an on/off checkbox and status (last sent, last snapshot, last error, site key prefix). New constants `CY_ULW_DASHBOARD_REPORTING` and `CY_ULW_DASHBOARD_URL`, filter `cy_ulw_reporting_enabled`, action `cy_ulw_activity_recorded`, option `cy_ulw_reporter` and daily cron event `cy_ulw_daily_report`.
 
 = 1.1.2 =
 * New releases now install themselves through WordPress background updates instead of waiting on the Plugins screen for someone to click Update. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
