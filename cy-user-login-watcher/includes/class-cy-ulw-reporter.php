@@ -457,14 +457,17 @@ final class CY_ULW_Reporter {
 		return wp_remote_post(
 			self::endpoint(),
 			array(
-				'blocking'   => (bool) $blocking,
-				'timeout'    => $blocking ? 10 : 3,
-				'headers'    => array(
+				'blocking'    => (bool) $blocking,
+				'timeout'     => $blocking ? 10 : 3,
+				// A redirect is never a valid intake answer. Following one would turn
+				// a Cloudflare Access login page (302) into a misleading "200 OK".
+				'redirection' => 0,
+				'headers'     => array(
 					'Content-Type'  => 'application/json',
 					'X-CY-Site-Key' => (string) $site_key,
 				),
-				'body'       => $body,
-				'user-agent' => 'CY-User-Login-Watcher/' . CY_ULW_VERSION . '; ' . home_url(),
+				'body'        => $body,
+				'user-agent'  => 'CY-User-Login-Watcher/' . CY_ULW_VERSION . '; ' . home_url(),
 			)
 		);
 	}
@@ -523,6 +526,9 @@ final class CY_ULW_Reporter {
 				return 'HTTP 401: site key missing';
 			case 409:
 				return 'HTTP 409: site key does not match the one approved on the dashboard';
+			case 302:
+			case 403:
+				return 'HTTP ' . (int) $code . ': blocked in front of the dashboard (Cloudflare Access needs a bypass for the intake path)';
 		}
 		return 'HTTP ' . (int) $code;
 	}
