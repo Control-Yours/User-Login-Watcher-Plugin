@@ -20,7 +20,7 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
 * Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
 * Updates itself from GitHub Releases. New releases are installed by the twice-daily WordPress update check without anyone clicking Update; they also appear on the normal Updates screen. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
-* Reports to the Control Yours Admin Dashboard (admin.controlyours.com): each login and each throttled "last active" update is sent as it happens (non-blocking, so a slow or unreachable dashboard never delays a login by more than three seconds and never stops it being recorded), and a full snapshot of tracked users goes out once a day from WP-cron so the dashboard can show who has never logged in and drop users that were deleted. The site identifies itself with a random key it generated on its own and stays "pending" on the dashboard until someone approves it there; no shared secret is stored in this plugin. Untick the box under Settings > Login Watcher to stop reporting from one site, define `CY_ULW_DASHBOARD_REPORTING` as false in wp-config.php to switch it off outright, or define `CY_ULW_DASHBOARD_URL` to point a site at a different dashboard.
+* Reports to the Control Yours Admin Dashboard (admin.controlyours.com): each login and each throttled "last active" update is sent as it happens (non-blocking, so a slow or unreachable dashboard never delays a login by more than three seconds and never stops it being recorded), and a full snapshot of tracked users goes out once a day from WP-cron so the dashboard can show who has never logged in and drop users that were deleted. The site identifies itself with a random key it generated on its own and stays "pending" on the dashboard until someone approves it there; no shared secret is stored in this plugin. Untick the box under Settings > Login Watcher to stop reporting from one site, define `CY_ULW_DASHBOARD_REPORTING` as false in wp-config.php to switch it off outright, or define `CY_ULW_DASHBOARD_URL` to point a site at a different dashboard. Staging and development copies send nothing: a site whose address is on `wpenginepowered.com` or `wpengine.com` is treated as a copy of a production site and never announces itself to the dashboard, so pushing production to staging adds nothing to the Pending list. Define `CY_ULW_DASHBOARD_REPORTING` as true in wp-config.php on a copy you do want to watch.
 * One small settings screen (Settings > Login Watcher): roles not tracked, roles that can see login data, and the dashboard reporting switch with its status. No front-end output. No database tables. One daily cron event (the dashboard snapshot). Two small autoloaded options.
 
 == Performance ==
@@ -54,7 +54,8 @@ Each report is a JSON `POST` to `https://admin.controlyours.com/api/logins/intak
 * `cy_ulw_track_user` (bool, default `true`; receives `$user_id`) — return `false` to skip tracking for a specific user (e.g. an agency account).
 * `cy_ulw_view_capability` (string, default `manage_options`; `manage_network_users` in the network admin) — who can see the column and widget.
 * `cy_ulw_widget_count` (int, default `10`) — how many users the Dashboard widget lists.
-* `cy_ulw_reporting_enabled` (bool, default `true` unless unticked on the settings screen) — return `false` to stop reporting to the dashboard. The `CY_ULW_DASHBOARD_REPORTING` constant wins over this filter.
+* `cy_ulw_reporting_enabled` (bool, default `true` unless unticked on the settings screen) — return `false` to stop reporting to the dashboard. The `CY_ULW_DASHBOARD_REPORTING` constant and the staging check win over this filter.
+* `cy_ulw_is_staging_site` (bool, default `true` when the home URL host ends in `.wpenginepowered.com` or `.wpengine.com`) — whether this site counts as a staging or development copy and therefore sends nothing to the dashboard. Return `false` on a production site the rule catches by mistake, or `true` on a copy it misses.
 
 Action `cy_ulw_login_recorded( $user_id, $timestamp, $user )` fires after a login is stored.
 
@@ -64,7 +65,7 @@ Constant `CY_ULW_UPDATE_MANIFEST` (define in wp-config.php) — point a site at 
 
 Constant `CY_ULW_AUTO_UPDATE` (define in wp-config.php as `false`) — keep a site on manual updates instead of installing new releases automatically.
 
-Constant `CY_ULW_DASHBOARD_REPORTING` (define in wp-config.php as `false`) — send nothing to the Admin Dashboard from this site; the settings checkbox is then shown disabled.
+Constant `CY_ULW_DASHBOARD_REPORTING` (define in wp-config.php as `false` or `true`) — `false` sends nothing to the Admin Dashboard from this site; `true` reports from a staging or development copy that would otherwise be skipped. The settings checkbox is shown disabled when the constant is `false` and on a skipped copy.
 
 Constant `CY_ULW_DASHBOARD_URL` (define in wp-config.php) — send reports to a different intake URL, e.g. a local build of the dashboard.
 
@@ -78,6 +79,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.2.1 =
+* Staging and development copies no longer report to the Admin Dashboard. A site whose home URL is on `wpenginepowered.com` or `wpengine.com` sends no events and no snapshot and drops its daily cron event, so pushing production to staging no longer adds a pending site to the dashboard. The settings checkbox is shown disabled there with a note. Define `CY_ULW_DASHBOARD_REPORTING` as true in wp-config.php to report from such a copy anyway, or use the new `cy_ulw_is_staging_site` filter to correct the detection on a site.
 
 = 1.2.0 =
 * Reports to the Control Yours Admin Dashboard: logins and "last active" updates are sent as they happen, plus a daily snapshot of every tracked user. Each site generates its own key and waits as "pending" on the dashboard until approved there. New "Dashboard reporting" section under Settings > Login Watcher with an on/off checkbox and status (last sent, last snapshot, last error, site key prefix). New constants `CY_ULW_DASHBOARD_REPORTING` and `CY_ULW_DASHBOARD_URL`, filter `cy_ulw_reporting_enabled`, action `cy_ulw_activity_recorded`, option `cy_ulw_reporter` and daily cron event `cy_ulw_daily_report`.

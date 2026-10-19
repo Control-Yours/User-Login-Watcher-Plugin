@@ -135,6 +135,8 @@ final class CY_ULW_Settings {
 		$roles    = wp_roles()->get_names();
 		$reporter = CY_ULW_Reporter::config();
 		$locked   = CY_ULW_Reporter::disabled_by_constant();
+		$staging  = ! $locked && ! CY_ULW_Reporter::forced_by_constant() && CY_ULW_Reporter::looks_like_staging();
+		$frozen   = $locked || $staging; // Checkbox shown disabled and left out of the form.
 		$host     = wp_parse_url( CY_ULW_Reporter::endpoint(), PHP_URL_HOST );
 		?>
 		<div class="wrap">
@@ -181,15 +183,17 @@ final class CY_ULW_Settings {
 						<td>
 							<fieldset>
 								<legend class="screen-reader-text"><?php esc_html_e( 'Admin Dashboard', 'cy-user-login-watcher' ); ?></legend>
-								<?php if ( ! $locked ) : ?>
+								<?php if ( ! $frozen ) : ?>
 									<input type="hidden" name="<?php echo esc_attr( CY_ULW_Reporter::OPTION ); ?>[enabled]" value="0">
 								<?php endif; ?>
 								<label>
-									<input type="checkbox" name="<?php echo esc_attr( CY_ULW_Reporter::OPTION ); ?>[enabled]" value="1" <?php checked( ! $locked && empty( $reporter['disabled'] ) ); ?> <?php disabled( $locked ); ?>>
+									<input type="checkbox" name="<?php echo esc_attr( CY_ULW_Reporter::OPTION ); ?>[enabled]" value="1" <?php checked( ! $frozen && empty( $reporter['disabled'] ) ); ?> <?php disabled( $frozen ); ?>>
 									<?php esc_html_e( 'Send login data to the Control Yours Admin Dashboard', 'cy-user-login-watcher' ); ?>
 								</label>
 								<?php if ( $locked ) : ?>
 									<p class="description"><?php esc_html_e( 'Switched off by the CY_ULW_DASHBOARD_REPORTING constant in wp-config.php.', 'cy-user-login-watcher' ); ?></p>
+								<?php elseif ( $staging ) : ?>
+									<p class="description"><?php esc_html_e( 'Switched off on this staging or development copy. Define CY_ULW_DASHBOARD_REPORTING as true in wp-config.php to report from here anyway.', 'cy-user-login-watcher' ); ?></p>
 								<?php else : ?>
 									<p class="description"><?php esc_html_e( 'Logins and admin activity are sent as they happen, and the full list of tracked users once a day, so the team can see who has been in the site without logging in here. Nothing else leaves the site.', 'cy-user-login-watcher' ); ?></p>
 								<?php endif; ?>

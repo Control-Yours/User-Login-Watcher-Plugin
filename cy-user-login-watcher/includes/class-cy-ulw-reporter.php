@@ -16,7 +16,10 @@
  *
  * Switches: define CY_ULW_DASHBOARD_REPORTING as false in wp-config.php to
  * send nothing from a site, CY_ULW_DASHBOARD_URL to point it at another
- * dashboard, or untick the box under Settings > Login Watcher.
+ * dashboard, or untick the box under Settings > Login Watcher. Staging and
+ * development copies (home URL on wpenginepowered.com or wpengine.com) send
+ * nothing unless CY_ULW_DASHBOARD_REPORTING is defined as true; see
+ * looks_like_staging().
  *
  * @package CY_User_Login_Watcher
  */
@@ -53,6 +56,13 @@ final class CY_ULW_Reporter {
 	 * Users fetched per query when building the snapshot.
 	 */
 	const SNAPSHOT_BATCH = 500;
+
+	/**
+	 * Home URL host endings that mark a WP Engine platform address. Staging
+	 * and development environments live on these; production sites run on
+	 * their own domain.
+	 */
+	const STAGING_HOST_SUFFIXES = array( '.wpenginepowered.com', '.wpengine.com' );
 
 	/**
 	 * Register hooks.
@@ -165,6 +175,70 @@ final class CY_ULW_Reporter {
 	}
 
 	/**
+	 * Whether reporting is forced on by the wp-config.php constant. This is how
+	 * a staging or development copy that someone does want watched opts back in.
+	 *
+	 * @return bool
+	 */
+	public static function forced_by_constant() {
+		return defined( 'CY_ULW_DASHBOARD_REPORTING' ) && (bool) CY_ULW_DASHBOARD_REPORTING;
+	}
+
+	/**
+	 * Whether this looks like a staging or development copy of a site.
+	 *
+	 * Control Yours pushes production to WP Engine staging and development
+	 * environments all the time. Each copy carries the plugin and its settings,
+	 * so left alone it would announce itself to the dashboard as a new pending
+	 * site under a host like example1stg.wpenginepowered.com, and the pending
+	 * list would fill with copies whose names keep changing. A copy is
+	 * recognised by its home URL host (without "www.") ending in
+	 * .wpenginepowered.com or .wpengine.com; production sites run on their
+	 * own domain. The install name is deliberately not used: live installs
+	 * such as "dcwincdev" happen to end in "dev".
+	 *
+	 * Cheap: reads the home option WordPress has already loaded, no queries.
+	 *
+	 * @return bool
+	 */
+	public static function looks_like_staging() {
+		$staging = false;
+
+		$host = strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+		if ( 0 === strpos( $host, 'www.' ) ) {
+			$host = substr( $host, 4 );
+		}
+		foreach ( self::STAGING_HOST_SUFFIXES as $suffix ) {
+			if ( self::ends_with( $host, $suffix ) ) {
+				$staging = true;
+				break;
+			}
+		}
+
+		/**
+		 * Filter whether this site counts as a staging or development copy.
+		 * A copy sends nothing to the Admin Dashboard unless the
+		 * CY_ULW_DASHBOARD_REPORTING constant is defined as true.
+		 *
+		 * @param bool $staging Default: true when the home URL host ends in
+		 *                      .wpenginepowered.com or .wpengine.com.
+		 */
+		return (bool) apply_filters( 'cy_ulw_is_staging_site', $staging );
+	}
+
+	/**
+	 * Whether a string ends with the given suffix. str_ends_with() needs PHP 8.
+	 *
+	 * @param string $haystack String to test.
+	 * @param string $suffix   Ending to look for.
+	 * @return bool
+	 */
+	private static function ends_with( $haystack, $suffix ) {
+		$length = strlen( $suffix );
+		return $length > 0 && substr( $haystack, -$length ) === $suffix;
+	}
+
+	/**
 	 * Whether this site reports to the dashboard at all.
 	 *
 	 * Reads the option directly rather than through config() so that checking
@@ -177,6 +251,14 @@ final class CY_ULW_Reporter {
 			return false;
 		}
 
+		// Staging and development copies stay quiet unless the constant says
+		// otherwise, so pushing production to staging never adds a pending
+		// site to the dashboard. Checked before the option and filter: nothing
+		// saved on the copied site can switch it back on.
+		if ( ! self::forced_by_constant() && self::looks_like_staging() ) {
+			return false;
+		}
+
 		$saved   = get_option( self::OPTION );
 		$enabled = ! ( is_array( $saved ) && ! empty( $saved['disabled'] ) );
 
@@ -184,8 +266,8 @@ final class CY_ULW_Reporter {
 		 * Filter whether this site sends login data to the Admin Dashboard.
 		 *
 		 * @param bool $enabled Default: true unless the box under Settings > Login Watcher
-		 *                      is unticked. The CY_ULW_DASHBOARD_REPORTING constant wins
-		 *                      over this filter.
+		 *                      is unticked. The CY_ULW_DASHBOARD_REPORTING constant and the
+		 *                      staging check (see looks_like_staging()) win over this filter.
 		 */
 		return (bool) apply_filters( 'cy_ulw_reporting_enabled', $enabled );
 	}
