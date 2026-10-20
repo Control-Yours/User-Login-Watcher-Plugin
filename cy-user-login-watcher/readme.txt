@@ -3,7 +3,7 @@ Contributors: controlyours
 Requires at least: 6.0
 Tested up to: 7.1.3
 Requires PHP: 7.4
-Stable tag: 1.2.1
+Stable tag: 1.3.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,10 +18,10 @@ Internal Control Yours plugin. Replaces the "last login" column that our previou
 * Adds a sortable **Last Login** column to Users > All Users (and Network Admin > Users on multisite). Hover for the exact date/time. Users who have never logged in since activation are labelled and sort to the bottom rather than disappearing.
 * Adds a **Recent Logins** widget to the Dashboard listing the ten most recent logins, plus a count of users who have not logged in since tracking began.
 * Column and widget are shown to administrators, plus any roles ticked under Settings > Login Watcher. Other client roles never see them.
-* Tracks people who work in the site. Users whose only roles are Subscriber or WooCommerce Customer are not tracked by default (filter `cy_ulw_excluded_roles`), so stores and membership sites stay light.
+* Tracks people who work in the site. Only recognised roles are tracked by default: Administrator, Editor, Author, Contributor, WooCommerce Shop Manager and the Control Yours Client role. Subscribers, customers and any role a plugin added (members, agents, dealers, portal clients) are off until ticked under Settings > Login Watcher on that site, so stores and membership sites stay light and a plugin's customer role never floods the list. Filter `cy_ulw_tracked_roles` adjusts the set in code.
 * Updates itself from GitHub Releases. New releases are installed by the twice-daily WordPress update check without anyone clicking Update; they also appear on the normal Updates screen. Define `CY_ULW_AUTO_UPDATE` as false in wp-config.php to keep a site on manual updates.
 * Reports to the Control Yours Admin Dashboard (admin.controlyours.com): each login and each throttled "last active" update is sent as it happens (non-blocking, so a slow or unreachable dashboard never delays a login by more than three seconds and never stops it being recorded), and a full snapshot of tracked users goes out once a day from WP-cron so the dashboard can show who has never logged in and drop users that were deleted. The site identifies itself with a random key it generated on its own and stays "pending" on the dashboard until someone approves it there; no shared secret is stored in this plugin. Untick the box under Settings > Login Watcher to stop reporting from one site, define `CY_ULW_DASHBOARD_REPORTING` as false in wp-config.php to switch it off outright, or define `CY_ULW_DASHBOARD_URL` to point a site at a different dashboard. Staging and development copies send nothing: a site whose address is on `wpenginepowered.com` or `wpengine.com` is treated as a copy of a production site and never announces itself to the dashboard, so pushing production to staging adds nothing to the Pending list. Define `CY_ULW_DASHBOARD_REPORTING` as true in wp-config.php on a copy you do want to watch.
-* One small settings screen (Settings > Login Watcher): roles not tracked, roles that can see login data, and the dashboard reporting switch with its status. No front-end output. No database tables. One daily cron event (the dashboard snapshot). Two small autoloaded options.
+* One small settings screen (Settings > Login Watcher): roles tracked, roles that can see login data, and the dashboard reporting switch with its status. No front-end output. No database tables. One daily cron event (the dashboard snapshot). Two small autoloaded options.
 
 == Performance ==
 
@@ -79,6 +79,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.3.0 =
+* Tracking is now opt-in per role instead of opt-out. Only recognised roles are tracked by default (Administrator, Editor, Author, Contributor, WooCommerce Shop Manager, Client); every other role, including ones added by plugins such as customers, members, agents, dealers or portal clients, is untracked until ticked under Settings > Login Watcher, where the setting is now "Roles tracked" and plugin-added roles are marked. Administrators are always tracked. The next daily snapshot drops users who no longer qualify from the Admin Dashboard. A site that had unticked Subscriber or Customer under the old "Roles not tracked" setting needs them ticked again here. New filter `cy_ulw_tracked_roles`; `cy_ulw_excluded_roles` still removes roles from the tracked set.
 
 = 1.2.1 =
 * Staging and development copies no longer report to the Admin Dashboard. A site whose home URL is on `wpenginepowered.com` or `wpengine.com` sends no events and no snapshot and drops its daily cron event, so pushing production to staging no longer adds a pending site to the dashboard. The settings checkbox is shown disabled there with a note. Define `CY_ULW_DASHBOARD_REPORTING` as true in wp-config.php to report from such a copy anyway, or use the new `cy_ulw_is_staging_site` filter to correct the detection on a site.

@@ -90,12 +90,15 @@ final class CY_ULW_Settings {
 		$input    = is_array( $input ) ? $input : array();
 		$known    = array_keys( wp_roles()->roles );
 
-		$excluded = isset( $input['excluded_roles'] ) ? array_map( 'sanitize_key', (array) $input['excluded_roles'] ) : array();
-		$view     = isset( $input['view_roles'] ) ? array_map( 'sanitize_key', (array) $input['view_roles'] ) : array();
+		$tracked = isset( $input['tracked_roles'] ) ? array_map( 'sanitize_key', (array) $input['tracked_roles'] ) : array();
+		$view    = isset( $input['view_roles'] ) ? array_map( 'sanitize_key', (array) $input['view_roles'] ) : array();
+
+		// Administrators are always tracked; the checkbox is disabled on the page so it never posts.
+		$tracked = array_merge( array( 'administrator' ), $tracked );
 
 		return array(
-			'excluded_roles'   => array_values( array_intersect( $excluded, $known ) ),
-			'view_roles'       => array_values( array_intersect( $view, $known ) ),
+			'tracked_roles' => array_values( array_unique( array_intersect( $tracked, $known ) ) ),
+			'view_roles'    => array_values( array_intersect( $view, $known ) ),
 		);
 	}
 
@@ -131,9 +134,11 @@ final class CY_ULW_Settings {
 			return;
 		}
 
-		$settings = cy_ulw_settings();
-		$roles    = wp_roles()->get_names();
-		$reporter = CY_ULW_Reporter::config();
+		$settings    = cy_ulw_settings();
+		$roles       = wp_roles()->get_names();
+		$tracked     = (array) $settings['tracked_roles'];
+		$known_roles = cy_ulw_known_roles();
+		$reporter    = CY_ULW_Reporter::config();
 		$locked   = CY_ULW_Reporter::disabled_by_constant();
 		$staging  = ! $locked && ! CY_ULW_Reporter::forced_by_constant() && CY_ULW_Reporter::looks_like_staging();
 		$frozen   = $locked || $staging; // Checkbox shown disabled and left out of the form.
@@ -145,17 +150,20 @@ final class CY_ULW_Settings {
 				<?php settings_fields( self::PAGE ); ?>
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><?php esc_html_e( 'Roles not tracked', 'cy-user-login-watcher' ); ?></th>
+						<th scope="row"><?php esc_html_e( 'Roles tracked', 'cy-user-login-watcher' ); ?></th>
 						<td>
 							<fieldset>
-								<legend class="screen-reader-text"><?php esc_html_e( 'Roles not tracked', 'cy-user-login-watcher' ); ?></legend>
+								<legend class="screen-reader-text"><?php esc_html_e( 'Roles tracked', 'cy-user-login-watcher' ); ?></legend>
 								<?php foreach ( $roles as $slug => $name ) : ?>
 									<label style="display:block;margin-bottom:4px">
-										<input type="checkbox" name="<?php echo esc_attr( CY_ULW_SETTINGS_OPTION ); ?>[excluded_roles][]" value="<?php echo esc_attr( $slug ); ?>" <?php checked( in_array( $slug, $settings['excluded_roles'], true ) ); ?>>
+										<input type="checkbox" name="<?php echo esc_attr( CY_ULW_SETTINGS_OPTION ); ?>[tracked_roles][]" value="<?php echo esc_attr( $slug ); ?>" <?php checked( 'administrator' === $slug || in_array( $slug, $tracked, true ) ); ?> <?php disabled( 'administrator' === $slug ); ?>>
 										<?php echo esc_html( translate_user_role( $name ) ); ?>
+										<?php if ( ! in_array( $slug, $known_roles, true ) ) : ?>
+											<span class="description"><?php esc_html_e( '(added by a plugin or theme, off by default)', 'cy-user-login-watcher' ); ?></span>
+										<?php endif; ?>
 									</label>
 								<?php endforeach; ?>
-								<p class="description"><?php esc_html_e( 'Logins and activity are not recorded for users whose only roles are ticked here. They show "Not tracked" on the Users screen and are left out of the Dashboard widget count. Untick Subscriber on a site where members matter.', 'cy-user-login-watcher' ); ?></p>
+								<p class="description"><?php esc_html_e( 'Logins and activity are recorded for users who hold at least one ticked role; they are the users the Admin Dashboard sees. Administrators, editors, authors, contributors, WooCommerce shop managers and the Client role are on by default. Subscribers, customers and any role a plugin added (members, agents, dealers, portal clients) are off until ticked here, so a store or membership site stays light. Everyone else shows "Not tracked" on the Users screen.', 'cy-user-login-watcher' ); ?></p>
 							</fieldset>
 						</td>
 					</tr>

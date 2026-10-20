@@ -144,7 +144,7 @@ final class CY_ULW_Admin {
 		$active = (int) get_user_meta( $user_id, CY_ULW_Tracker::META_LAST_ACTIVE, true );
 
 		if ( ! $login && ! CY_ULW_Tracker::is_tracked_role( $user_id ) ) {
-			return '<span class="cy-ulw-never" title="' . esc_attr__( 'Users with only an excluded role (Subscriber, Customer) are not tracked.', 'cy-user-login-watcher' ) . '">' . esc_html__( 'Not tracked', 'cy-user-login-watcher' ) . '</span>';
+			return '<span class="cy-ulw-never" title="' . esc_attr__( 'This user holds no tracked role. Tick the role under Settings > Login Watcher to track it.', 'cy-user-login-watcher' ) . '">' . esc_html__( 'Not tracked', 'cy-user-login-watcher' ) . '</span>';
 		}
 
 		if ( ! $login ) {
@@ -324,13 +324,13 @@ final class CY_ULW_Admin {
 		echo '</tbody></table>';
 
 		// Footer: how many tracked users have never logged in since tracking began.
-		// Excluded roles (subscribers, customers) are left out so a store does not
-		// report every customer as "never logged in".
+		// Only tracked roles count, so a store does not report every customer
+		// as "never logged in".
 		$never_args = array(
 			'number'       => 1,
 			'fields'       => 'ID',
 			'count_total'  => true,
-			'role__not_in' => CY_ULW_Tracker::excluded_roles(),
+			'role__in'     => CY_ULW_Tracker::tracked_roles(),
 			'meta_query'  => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Intentional; runs only on the admin dashboard.
 				array(
 					'key'     => CY_ULW_Tracker::META_LAST_LOGIN,

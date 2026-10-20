@@ -3,7 +3,7 @@
  * Plugin Name:       CY User Login Watcher
  * Plugin URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
  * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only.
- * Version:           1.2.1
+ * Version:           1.3.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Control Yours
@@ -36,7 +36,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CY_ULW_VERSION', '1.2.1' );
+define( 'CY_ULW_VERSION', '1.3.0' );
 define( 'CY_ULW_FILE', __FILE__ );
 define( 'CY_ULW_BASENAME', plugin_basename( __FILE__ ) );
 define( 'CY_ULW_DIR', __DIR__ );
@@ -55,9 +55,28 @@ define( 'CY_ULW_SETTINGS_OPTION', 'cy_ulw_settings' );
  */
 function cy_ulw_default_settings() {
 	return array(
-		'excluded_roles'   => array( 'subscriber', 'customer' ),
+		'tracked_roles'    => cy_ulw_known_roles(),
 		'view_roles'       => array( 'administrator' ),
 		'activity_minutes' => 15, // Not on the settings page; change with the cy_ulw_activity_throttle filter.
+	);
+}
+
+/**
+ * Roles the plugin recognises as people who work in a site, and therefore
+ * tracks by default. Anything else (subscribers, customers, members, agents,
+ * dealers, portal clients and whatever a plugin invents) stays untracked until
+ * someone ticks it under Settings > Login Watcher on that site.
+ *
+ * @return string[] Role slugs.
+ */
+function cy_ulw_known_roles() {
+	return array(
+		'administrator',
+		'editor',
+		'author',
+		'contributor',
+		'shop_manager', // WooCommerce staff.
+		'client',       // Control Yours' own client login role.
 	);
 }
 
@@ -235,27 +254,52 @@ final class CY_ULW_Tracker {
 		/**
 		 * Filter whether a specific user should be tracked.
 		 *
-		 * @param bool $track   Default: false when every role the user holds is excluded, true otherwise.
+		 * @param bool $track   Default: true when the user holds at least one tracked role, false otherwise.
 		 * @param int  $user_id User ID.
 		 */
 		return (bool) apply_filters( 'cy_ulw_track_user', self::is_tracked_role( $user_id ), (int) $user_id );
 	}
 
 	/**
-	 * Roles whose users are not tracked by default: site visitors and shop
-	 * customers, not people who work in the admin.
+	 * Roles whose users are tracked: the "Roles tracked" setting (the
+	 * recognised roles from cy_ulw_known_roles() unless changed on the site),
+	 * with administrators always included. Every other role on the site is
+	 * untracked, so a plugin's customer, member or portal role never fills the
+	 * list by accident.
+	 *
+	 * @return string[] Role slugs.
+	 */
+	public static function tracked_roles() {
+		$roles = array_merge( array( 'administrator' ), (array) cy_ulw_setting( 'tracked_roles' ) );
+
+		/**
+		 * Filter the roles that are tracked. A user is tracked when they hold
+		 * at least one of these.
+		 *
+		 * @param string[] $roles Default: the "Roles tracked" setting plus administrator.
+		 */
+		$roles = apply_filters( 'cy_ulw_tracked_roles', $roles );
+
+		/**
+		 * Filter roles that must never be tracked, kept for sites that used it
+		 * before 1.3.0. Anything listed here is removed from the tracked set.
+		 *
+		 * @param string[] $roles Default: none.
+		 */
+		$excluded = apply_filters( 'cy_ulw_excluded_roles', array() );
+
+		$roles = array_diff( array_map( 'strval', (array) $roles ), array_map( 'strval', (array) $excluded ) );
+		return array_values( array_unique( array_filter( $roles ) ) );
+	}
+
+	/**
+	 * Roles that are not tracked on this site: everything registered minus the tracked set.
+	 * Used by the dashboard widget's "never logged in" count.
 	 *
 	 * @return string[] Role slugs.
 	 */
 	public static function excluded_roles() {
-		/**
-		 * Filter the roles that are not tracked. A user is skipped only when
-		 * every role they hold is in this list.
-		 *
-		 * @param string[] $roles Default: the "Roles not tracked" setting (subscriber and customer unless changed).
-		 */
-		$roles = apply_filters( 'cy_ulw_excluded_roles', (array) cy_ulw_setting( 'excluded_roles' ) );
-		return array_values( array_filter( array_map( 'strval', (array) $roles ) ) );
+		return array_values( array_diff( array_keys( wp_roles()->roles ), self::tracked_roles() ) );
 	}
 
 	/**
@@ -272,7 +316,7 @@ final class CY_ULW_Tracker {
 		if ( ! $user || empty( $user->roles ) ) {
 			return false;
 		}
-		return (bool) array_diff( (array) $user->roles, self::excluded_roles() );
+		return (bool) array_intersect( array_map( 'strval', (array) $user->roles ), self::tracked_roles() );
 	}
 
 	/**
