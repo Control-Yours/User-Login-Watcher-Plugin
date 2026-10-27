@@ -82,13 +82,16 @@ final class CY_ULW_Settings {
 	 * Validate submitted settings. Unknown roles are dropped. The activity interval is not
 	 * exposed on the page; it keeps its default unless the cy_ulw_activity_throttle filter changes it.
 	 *
+	 * The file editor checkbox posts a hidden 0 before it, so an unticked box arrives as "0".
+	 * When the field is missing altogether (the box is shown disabled because wp-config.php
+	 * already switches the editors off, or the option is written from code) the saved value stays.
+	 *
 	 * @param mixed $input Raw input.
 	 * @return array
 	 */
 	public static function sanitize( $input ) {
-		$defaults = cy_ulw_default_settings();
-		$input    = is_array( $input ) ? $input : array();
-		$known    = array_keys( wp_roles()->roles );
+		$input = is_array( $input ) ? $input : array();
+		$known = array_keys( wp_roles()->roles );
 
 		$tracked = isset( $input['tracked_roles'] ) ? array_map( 'sanitize_key', (array) $input['tracked_roles'] ) : array();
 		$view    = isset( $input['view_roles'] ) ? array_map( 'sanitize_key', (array) $input['view_roles'] ) : array();
@@ -97,8 +100,9 @@ final class CY_ULW_Settings {
 		$tracked = array_merge( array( 'administrator' ), $tracked );
 
 		return array(
-			'tracked_roles' => array_values( array_unique( array_intersect( $tracked, $known ) ) ),
-			'view_roles'    => array_values( array_intersect( $view, $known ) ),
+			'tracked_roles'       => array_values( array_unique( array_intersect( $tracked, $known ) ) ),
+			'view_roles'          => array_values( array_intersect( $view, $known ) ),
+			'disable_file_editor' => isset( $input['disable_file_editor'] ) ? ! empty( $input['disable_file_editor'] ) : (bool) cy_ulw_setting( 'disable_file_editor' ),
 		);
 	}
 
@@ -143,6 +147,10 @@ final class CY_ULW_Settings {
 		$staging  = ! $locked && ! CY_ULW_Reporter::forced_by_constant() && CY_ULW_Reporter::looks_like_staging();
 		$frozen   = $locked || $staging; // Checkbox shown disabled and left out of the form.
 		$host     = wp_parse_url( CY_ULW_Reporter::endpoint(), PHP_URL_HOST );
+
+		$editor_saved    = ! empty( $settings['disable_file_editor'] );
+		$editor_constant = CY_ULW_File_Editor::disabled_by_constant(); // Checkbox shown ticked and disabled.
+		$editor_filtered = ! $editor_constant && CY_ULW_File_Editor::is_disabled() !== $editor_saved;
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'Login Watcher', 'cy-user-login-watcher' ); ?></h1>
@@ -179,6 +187,36 @@ final class CY_ULW_Settings {
 									</label>
 								<?php endforeach; ?>
 								<p class="description"><?php esc_html_e( 'The Last Login column and the Recent Logins widget are shown to these roles. Administrators always see them.', 'cy-user-login-watcher' ); ?></p>
+							</fieldset>
+						</td>
+					</tr>
+				</table>
+
+				<h2><?php esc_html_e( 'Security', 'cy-user-login-watcher' ); ?></h2>
+				<table class="form-table" role="presentation">
+					<tr>
+						<th scope="row"><?php esc_html_e( 'File editor', 'cy-user-login-watcher' ); ?></th>
+						<td>
+							<fieldset>
+								<legend class="screen-reader-text"><?php esc_html_e( 'File editor', 'cy-user-login-watcher' ); ?></legend>
+								<?php if ( ! $editor_constant ) : ?>
+									<input type="hidden" name="<?php echo esc_attr( CY_ULW_SETTINGS_OPTION ); ?>[disable_file_editor]" value="0">
+								<?php endif; ?>
+								<label>
+									<input type="checkbox" name="<?php echo esc_attr( CY_ULW_SETTINGS_OPTION ); ?>[disable_file_editor]" value="1" <?php checked( $editor_constant || $editor_saved ); ?> <?php disabled( $editor_constant ); ?>>
+									<?php esc_html_e( 'Switch off the theme and plugin file editors', 'cy-user-login-watcher' ); ?>
+								</label>
+								<?php if ( $editor_constant ) : ?>
+									<p class="description"><?php esc_html_e( 'Already switched off by DISALLOW_FILE_EDIT in wp-config.php.', 'cy-user-login-watcher' ); ?></p>
+								<?php else : ?>
+									<p class="description"><?php esc_html_e( 'Removes Appearance > Theme File Editor and Plugins > Plugin File Editor for everyone, administrators included, so a stolen admin login cannot be used to change the site\'s PHP code from the browser. Theme and plugin files can still be changed over SFTP or by installing an update. Untick only while someone needs the editor.', 'cy-user-login-watcher' ); ?></p>
+								<?php endif; ?>
+								<?php if ( $editor_filtered ) : ?>
+									<p class="description"><?php esc_html_e( 'The cy_ulw_disable_file_editor filter overrides this box on this site.', 'cy-user-login-watcher' ); ?></p>
+								<?php endif; ?>
+								<?php if ( is_multisite() ) : ?>
+									<p class="description"><?php esc_html_e( 'On a multisite network the editors are in Network Admin, which follows the main site\'s setting.', 'cy-user-login-watcher' ); ?></p>
+								<?php endif; ?>
 							</fieldset>
 						</td>
 					</tr>

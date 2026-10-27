@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       CY User Login Watcher
  * Plugin URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
- * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only.
+ * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only. Also switches off the theme and plugin file editors (Settings > Login Watcher).
  * Version:           1.3.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
@@ -26,6 +26,8 @@
  *    active" at most once every 15 minutes per user (see CY_ULW_Tracker).
  *  - Non-ajax wp-admin page loads: includes/class-cy-ulw-admin.php adds the
  *    Users column and Dashboard widget for administrators.
+ *  - wp-admin and admin-ajax: includes/class-cy-ulw-file-editor.php keeps
+ *    the theme and plugin file editors switched off (one capability filter).
  *  - wp-admin, cron and WP-CLI: includes/class-cy-ulw-updater.php checks
  *    GitHub for new versions (WordPress schedules this at most hourly).
  *  - Every request type: includes/class-cy-ulw-reporter.php registers hooks
@@ -55,9 +57,10 @@ define( 'CY_ULW_SETTINGS_OPTION', 'cy_ulw_settings' );
  */
 function cy_ulw_default_settings() {
 	return array(
-		'tracked_roles'    => cy_ulw_known_roles(),
-		'view_roles'       => array( 'administrator' ),
-		'activity_minutes' => 15, // Not on the settings page; change with the cy_ulw_activity_throttle filter.
+		'tracked_roles'       => cy_ulw_known_roles(),
+		'view_roles'          => array( 'administrator' ),
+		'activity_minutes'    => 15, // Not on the settings page; change with the cy_ulw_activity_throttle filter.
+		'disable_file_editor' => true, // Theme and plugin file editors off; see CY_ULW_File_Editor.
 	);
 }
 
@@ -349,6 +352,12 @@ CY_ULW_Reporter::init();
 
 register_activation_hook( __FILE__, array( 'CY_ULW_Reporter', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'CY_ULW_Reporter', 'deactivate' ) );
+
+// File editor switch: the editors are wp-admin screens and save through admin-ajax.
+if ( is_admin() ) {
+	require_once CY_ULW_DIR . '/includes/class-cy-ulw-file-editor.php';
+	CY_ULW_File_Editor::init();
+}
 
 // Admin UI: Users column + Dashboard widget. Not needed for ajax or the front end.
 if ( is_admin() && ! wp_doing_ajax() ) {
