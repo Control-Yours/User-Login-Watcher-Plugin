@@ -16,10 +16,11 @@
  *
  * Switches: define CY_ULW_DASHBOARD_REPORTING as false in wp-config.php to
  * send nothing from a site, CY_ULW_DASHBOARD_URL to point it at another
- * dashboard, or untick the box under Settings > Login Watcher. Staging and
- * development copies (home URL on wpenginepowered.com or wpengine.com) send
- * nothing unless CY_ULW_DASHBOARD_REPORTING is defined as true; see
- * looks_like_staging().
+ * dashboard, or untick the box under Settings > Login Watcher. Staging,
+ * development and local copies (home URL on wpenginepowered.com,
+ * wpengine.com, .local, .test, .localhost or localhost, or environment type
+ * "local" or "development") send nothing unless CY_ULW_DASHBOARD_REPORTING
+ * is defined as true; see looks_like_staging().
  *
  * @package CY_User_Login_Watcher
  */
@@ -63,6 +64,23 @@ final class CY_ULW_Reporter {
 	 * their own domain.
 	 */
 	const STAGING_HOST_SUFFIXES = array( '.wpenginepowered.com', '.wpengine.com' );
+
+	/**
+	 * Home URL host endings reserved for local development. Local (by WP
+	 * Engine) serves its copies on <site>.local; .test and .localhost are
+	 * reserved names (RFC 2606, RFC 6761) that no public site can use.
+	 */
+	const LOCAL_HOST_SUFFIXES = array( '.local', '.test', '.localhost' );
+
+	/**
+	 * wp_get_environment_type() values that mark a copy. Local sets "local"
+	 * in wp-config.php. WP Engine sets nothing, so its staging and development
+	 * installs report "production" and are recognised by host instead.
+	 * "staging" is left out on purpose: it adds nothing on WP Engine, and a
+	 * live site that still carries the setting from another host or a
+	 * developer's wp-config.php would stop reporting without anyone noticing.
+	 */
+	const COPY_ENVIRONMENT_TYPES = array( 'local', 'development' );
 
 	/**
 	 * Register hooks.
@@ -176,7 +194,8 @@ final class CY_ULW_Reporter {
 
 	/**
 	 * Whether reporting is forced on by the wp-config.php constant. This is how
-	 * a staging or development copy that someone does want watched opts back in.
+	 * a staging, development or local copy that someone does want watched opts
+	 * back in.
 	 *
 	 * @return bool
 	 */
@@ -185,17 +204,24 @@ final class CY_ULW_Reporter {
 	}
 
 	/**
-	 * Whether this looks like a staging or development copy of a site.
+	 * Whether this looks like a staging, development or local copy of a site.
 	 *
 	 * Control Yours pushes production to WP Engine staging and development
-	 * environments all the time. Each copy carries the plugin and its settings,
-	 * so left alone it would announce itself to the dashboard as a new pending
-	 * site under a host like example1stg.wpenginepowered.com, and the pending
-	 * list would fill with copies whose names keep changing. A copy is
-	 * recognised by its home URL host (without "www.") ending in
-	 * .wpenginepowered.com or .wpengine.com; production sites run on their
-	 * own domain. The install name is deliberately not used: live installs
-	 * such as "dcwincdev" happen to end in "dev".
+	 * environments and pulls it into Local all the time. Each copy carries the
+	 * plugin and its settings, site key included, so left alone it would
+	 * announce itself to the dashboard as a new pending site under a host like
+	 * example1stg.wpenginepowered.com or example.local, and the pending list
+	 * would fill with copies whose names keep changing. A copy is recognised
+	 * by any of:
+	 *
+	 *  - its home URL host (without "www.") ending in .wpenginepowered.com or
+	 *    .wpengine.com; production sites run on their own domain;
+	 *  - its home URL host ending in .local, .test or .localhost, or being
+	 *    localhost or a loopback address;
+	 *  - wp_get_environment_type() returning "local" or "development".
+	 *
+	 * The install name is deliberately not used: live installs such as
+	 * "dcwincdev" happen to end in "dev".
 	 *
 	 * Cheap: reads the home option WordPress has already loaded, no queries.
 	 *
@@ -215,15 +241,51 @@ final class CY_ULW_Reporter {
 			}
 		}
 
+		if ( ! $staging && self::is_local_host( $host ) ) {
+			$staging = true;
+		}
+
+		if ( ! $staging && in_array( wp_get_environment_type(), self::COPY_ENVIRONMENT_TYPES, true ) ) {
+			$staging = true;
+		}
+
 		/**
-		 * Filter whether this site counts as a staging or development copy.
-		 * A copy sends nothing to the Admin Dashboard unless the
+		 * Filter whether this site counts as a staging, development or local
+		 * copy. A copy sends nothing to the Admin Dashboard unless the
 		 * CY_ULW_DASHBOARD_REPORTING constant is defined as true.
 		 *
 		 * @param bool $staging Default: true when the home URL host ends in
-		 *                      .wpenginepowered.com or .wpengine.com.
+		 *                      .wpenginepowered.com, .wpengine.com, .local,
+		 *                      .test or .localhost, is localhost or a loopback
+		 *                      address, or the environment type is "local" or
+		 *                      "development".
 		 */
 		return (bool) apply_filters( 'cy_ulw_is_staging_site', $staging );
+	}
+
+	/**
+	 * Whether a home URL host can only be reached from the machine it runs on:
+	 * localhost, a loopback address (127.x.x.x, ::1) or a name under .local,
+	 * .test or .localhost.
+	 *
+	 * @param string $host Lower-case host, as parsed from home_url().
+	 * @return bool
+	 */
+	private static function is_local_host( $host ) {
+		$host = trim( $host, '[]' ); // wp_parse_url() keeps the brackets around IPv6 addresses.
+
+		if ( 'localhost' === $host || '::1' === $host ) {
+			return true;
+		}
+		if ( 0 === strpos( $host, '127.' ) && false !== filter_var( $host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+			return true;
+		}
+		foreach ( self::LOCAL_HOST_SUFFIXES as $suffix ) {
+			if ( self::ends_with( $host, $suffix ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -251,10 +313,11 @@ final class CY_ULW_Reporter {
 			return false;
 		}
 
-		// Staging and development copies stay quiet unless the constant says
-		// otherwise, so pushing production to staging never adds a pending
-		// site to the dashboard. Checked before the option and filter: nothing
-		// saved on the copied site can switch it back on.
+		// Staging, development and local copies stay quiet unless the constant
+		// says otherwise, so pushing production to staging or pulling it into
+		// Local never adds a pending site to the dashboard. Checked before the
+		// option and filter: nothing saved on the copied site can switch it
+		// back on.
 		if ( ! self::forced_by_constant() && self::looks_like_staging() ) {
 			return false;
 		}

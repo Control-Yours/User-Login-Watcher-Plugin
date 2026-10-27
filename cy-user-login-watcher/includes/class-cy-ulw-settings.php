@@ -201,7 +201,7 @@ final class CY_ULW_Settings {
 								<?php if ( $locked ) : ?>
 									<p class="description"><?php esc_html_e( 'Switched off by the CY_ULW_DASHBOARD_REPORTING constant in wp-config.php.', 'cy-user-login-watcher' ); ?></p>
 								<?php elseif ( $staging ) : ?>
-									<p class="description"><?php esc_html_e( 'Switched off on this staging or development copy. Define CY_ULW_DASHBOARD_REPORTING as true in wp-config.php to report from here anyway.', 'cy-user-login-watcher' ); ?></p>
+									<p class="description"><?php esc_html_e( 'Switched off on this staging, development or local copy. Define CY_ULW_DASHBOARD_REPORTING as true in wp-config.php to report from here anyway.', 'cy-user-login-watcher' ); ?></p>
 								<?php else : ?>
 									<p class="description"><?php esc_html_e( 'Logins and admin activity are sent as they happen, and the full list of tracked users once a day, so the team can see who has been in the site without logging in here. Nothing else leaves the site.', 'cy-user-login-watcher' ); ?></p>
 								<?php endif; ?>
