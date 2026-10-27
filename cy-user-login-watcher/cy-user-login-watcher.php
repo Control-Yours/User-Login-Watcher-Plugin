@@ -3,7 +3,7 @@
  * Plugin Name:       CY User Login Watcher
  * Plugin URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
  * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only. Also switches off the theme and plugin file editors (Settings > Login Watcher).
- * Version:           1.3.1
+ * Version:           1.4.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Control Yours
@@ -38,7 +38,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'CY_ULW_VERSION', '1.3.1' );
+define( 'CY_ULW_VERSION', '1.4.0' );
 define( 'CY_ULW_FILE', __FILE__ );
 define( 'CY_ULW_BASENAME', plugin_basename( __FILE__ ) );
 define( 'CY_ULW_DIR', __DIR__ );
