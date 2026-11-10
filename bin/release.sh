@@ -3,15 +3,30 @@
 # Cut a release of Control Yours Connector (folder and slug stay cy-user-login-watcher).
 #
 #   bash bin/release.sh <version>            bump, build zip, regenerate update.json (no git)
-#   bash bin/release.sh <version> --publish  ...then commit, tag, push, create the GitHub
-#                                       Release with the zip, and publish the manifest
+#   bash bin/release.sh <version> --staging  release to the test sites only: commit, tag, push,
+#                                       create the GitHub Release with the zip, and put the
+#                                       manifest on the "staging" branch. main's update.json
+#                                       is not touched, so no other site sees the version.
+#   bash bin/release.sh <version> --promote  give everyone a version already released with
+#                                       --staging: publish its manifest on main
+#   bash bin/release.sh <version> --publish  release to every site in one go (--staging and
+#                                       --promote together, without the staging branch)
 #
 # Before running: add a "= <version> =" entry to cy-user-login-watcher/readme.txt
 # under "== Changelog ==". The script refuses to release without one.
 #
-# Order of operations with --publish matters: the GitHub Release (with the zip)
-# is created BEFORE update.json is pushed, so client sites never see a version
-# whose package does not exist yet.
+# Which sites get a release is decided by one file: client sites read update.json
+# from the main branch, test sites (CY_ULW_UPDATE_MANIFEST in their wp-config.php)
+# read it from the staging branch. The tag, the GitHub Release and the version
+# bump on main reach nobody by themselves.
+#
+# Order of operations matters: the GitHub Release (with the zip) is created
+# BEFORE any update.json is pushed, so no site ever sees a version whose
+# package does not exist yet.
+#
+# A version that turns out wrong on the test sites is never promoted: fix it,
+# release the next version with --staging (the test sites move on to it), and
+# promote that one. Sites on main then skip the bad version altogether.
 #
 # Requirements: bash, git, zip, perl (all ship with macOS); gh (GitHub CLI) for --publish.
 
@@ -20,6 +35,7 @@ set -euo pipefail
 SLUG="cy-user-login-watcher"
 REPO="Control-Yours/User-Login-Watcher-Plugin"
 BRANCH="main"
+STAGING_BRANCH="staging"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUGIN_DIR="$ROOT/$SLUG"
@@ -29,13 +45,18 @@ MANIFEST="$ROOT/update.json"
 DIST="$ROOT/dist"
 
 VERSION="${1:-}"
-PUBLISH="${2:-}"
+MODE="${2:-}"
+ALREADY_RELEASED=0
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 # --- checks -----------------------------------------------------------------
 
-[ -n "$VERSION" ] || die "usage: bash bin/release.sh <version> [--publish]"
+[ -n "$VERSION" ] || die "usage: bash bin/release.sh <version> [--staging | --promote | --publish]"
+case "$MODE" in
+  ""|--staging|--promote|--publish) ;;
+  *) die "unknown option '$MODE' (expected --staging, --promote or --publish)" ;;
+esac
 printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$' || die "version must look like 1.2.3 (got '$VERSION')"
 [ -f "$MAIN" ] || die "plugin main file not found at $MAIN"
 [ -f "$README" ] || die "readme.txt not found at $README"
@@ -44,16 +65,28 @@ command -v perl >/dev/null || die "perl is required"
 
 grep -Eq "^= ${VERSION//./\\.} =\$" "$README" || die "readme.txt has no changelog entry '= $VERSION ='. Add it under == Changelog == first."
 
-if [ "$PUBLISH" = "--publish" ]; then
-  command -v git >/dev/null || die "git is required for --publish"
-  command -v gh >/dev/null || die "GitHub CLI (gh) is required for --publish: https://cli.github.com"
+if [ -n "$MODE" ]; then
+  command -v git >/dev/null || die "git is required for $MODE"
+  command -v gh >/dev/null || die "GitHub CLI (gh) is required for $MODE: https://cli.github.com"
   git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$ROOT is not a git repository"
   gh auth status >/dev/null 2>&1 || die "gh is not logged in (run: gh auth login)"
-  if git -C "$ROOT" rev-parse "v$VERSION" >/dev/null 2>&1; then
-    die "tag v$VERSION already exists"
-  fi
   CURRENT_BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
   [ "$CURRENT_BRANCH" = "$BRANCH" ] || die "switch to the '$BRANCH' branch first (on '$CURRENT_BRANCH')"
+
+  # A version that already has its tag is one of two things: released to the
+  # test sites and waiting to be promoted, or a --staging run that stopped
+  # half way. Either way nothing is rebuilt: it must be exactly what was tagged.
+  if git -C "$ROOT" rev-parse "v$VERSION" >/dev/null 2>&1; then
+    [ "$MODE" != "--publish" ] || die "tag v$VERSION already exists; to give it to everyone use: bash bin/release.sh $VERSION --promote"
+    git -C "$ROOT" fetch -q origin "$BRANCH" --tags
+    gh release view "v$VERSION" --repo "$REPO" >/dev/null 2>&1 || die "tag v$VERSION exists but its GitHub Release does not; create the release by hand or use a new version"
+    grep -q "define( 'CY_ULW_VERSION', '$VERSION' );" "$MAIN" || die "the plugin on '$BRANCH' is not at $VERSION; only the latest released version can be promoted"
+    git -C "$ROOT" diff --quiet "v$VERSION" HEAD -- "$SLUG" || die "the plugin on '$BRANCH' has changed since v$VERSION was tagged; release a new version with --staging instead"
+    [ "$(git -C "$ROOT" rev-parse HEAD)" = "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ] || die "local '$BRANCH' differs from origin/$BRANCH; pull or push first"
+    ALREADY_RELEASED=1
+  elif [ "$MODE" = "--promote" ]; then
+    die "tag v$VERSION does not exist; release it first with: bash bin/release.sh $VERSION --staging"
+  fi
 fi
 
 # --- bump version -----------------------------------------------------------
@@ -188,41 +221,75 @@ printf 'Updated %s -> version %s, package %s\n' "$MANIFEST" "$VERSION" "$PACKAGE
 
 # --- publish ----------------------------------------------------------------
 
-if [ "$PUBLISH" != "--publish" ]; then
+if [ -z "$MODE" ]; then
   cat <<EOF
 
-Nothing has been committed. To publish:
+Nothing has been committed. To release to the test sites first:
+
+  bash bin/release.sh $VERSION --staging
+
+and, once they look right, to everyone:
+
+  bash bin/release.sh $VERSION --promote
+
+Or to every site in one go:
 
   bash bin/release.sh $VERSION --publish
-
-or by hand:
-
-  git add $SLUG
-  git commit -m "Release v$VERSION"
-  git tag v$VERSION
-  git push origin $BRANCH --tags
-  gh release create v$VERSION "dist/$SLUG-$VERSION.zip" --title "v$VERSION" --notes "<changelog>"
-  git add update.json && git commit -m "Publish v$VERSION manifest" && git push origin $BRANCH
 EOF
   exit 0
 fi
 
 cd "$ROOT"
 
-# 1. Commit the version bump (everything except the manifest) and tag it.
-git add "$SLUG"
-if git diff --cached --quiet; then
-  printf 'Plugin files already at v%s; nothing to commit for the bump.\n' "$VERSION"
-else
-  git commit -q -m "Release v$VERSION"
+# Set the new manifest aside and put back the one that is live, so the version
+# bump is committed without it and main never carries a manifest by accident.
+NEW_MANIFEST="$(mktemp)"
+cp "$MANIFEST" "$NEW_MANIFEST"
+git checkout -q -- update.json
+
+if [ "$ALREADY_RELEASED" = 0 ]; then
+  # 1. Commit the version bump (everything except the manifest) and tag it.
+  #    Neither reaches a site: sites only act on update.json.
+  git add "$SLUG"
+  if git diff --cached --quiet; then
+    printf 'Plugin files already at v%s; nothing to commit for the bump.\n' "$VERSION"
+  else
+    git commit -q -m "Release v$VERSION"
+  fi
+  git tag "v$VERSION"
+  git push -q origin "$BRANCH" --tags
+
+  # 2. Create the GitHub Release with the zip attached. Sites download this.
+  gh release create "v$VERSION" "$ZIP" --repo "$REPO" --title "v$VERSION" --notes "${NOTES:-Release v$VERSION}"
 fi
-git tag "v$VERSION"
-git push -q origin "$BRANCH" --tags
 
-# 2. Create the GitHub Release with the zip attached. Clients download this.
-gh release create "v$VERSION" "$ZIP" --repo "$REPO" --title "v$VERSION" --notes "${NOTES:-Release v$VERSION}"
+if [ "$MODE" = "--staging" ]; then
+  # 3. Advertise the new version to the test sites only: the staging branch
+  #    becomes main as it is now plus the new manifest. It is rebuilt on every
+  #    staging release, so it is force-pushed and never merged anywhere.
+  STAGING_TREE="$(mktemp -d)"
+  git worktree add -q --detach "$STAGING_TREE" HEAD
+  cp "$NEW_MANIFEST" "$STAGING_TREE/update.json"
+  rm -f "$NEW_MANIFEST"
+  git -C "$STAGING_TREE" add update.json
+  git -C "$STAGING_TREE" commit -q -m "Staging manifest for v$VERSION"
+  git -C "$STAGING_TREE" push -q --force origin "HEAD:refs/heads/$STAGING_BRANCH"
+  git worktree remove --force "$STAGING_TREE"
 
-# 3. Only now advertise the new version to client sites.
+  printf '\nReleased v%s to the test sites only.\n' "$VERSION"
+  printf 'Staging manifest: https://raw.githubusercontent.com/%s/%s/update.json\n' "$REPO" "$STAGING_BRANCH"
+  printf 'Release:          https://github.com/%s/releases/tag/v%s\n' "$REPO" "$VERSION"
+  printf '\nA site is a test site when its wp-config.php has:\n\n'
+  printf "  define( 'CY_ULW_UPDATE_MANIFEST', 'https://raw.githubusercontent.com/%s/%s/update.json' );\n\n" "$REPO" "$STAGING_BRANCH"
+  printf 'Test sites pick it up on their next update check (cron twice daily, or Dashboard > Updates > "Check again").\n'
+  printf 'Every other site stays where it is. When the test sites look right:\n\n  bash bin/release.sh %s --promote\n' "$VERSION"
+  exit 0
+fi
+
+cp "$NEW_MANIFEST" "$MANIFEST"
+rm -f "$NEW_MANIFEST"
+
+# 3. Only now advertise the new version to every client site.
 git add update.json
 if git diff --cached --quiet; then
   printf 'update.json unchanged; manifest already published.\n'
@@ -231,7 +298,7 @@ else
   git push -q origin "$BRANCH"
 fi
 
-printf '\nPublished v%s.\n' "$VERSION"
+printf '\nPublished v%s to every site.\n' "$VERSION"
 printf 'Manifest: https://raw.githubusercontent.com/%s/%s/update.json\n' "$REPO" "$BRANCH"
 printf 'Release:  https://github.com/%s/releases/tag/v%s\n' "$REPO" "$VERSION"
 printf 'Client sites pick it up on their next update check (cron twice daily, or Dashboard > Updates > "Check again").\n'

@@ -25,16 +25,30 @@ The updater only accepts a `download_url` under `https://github.com/Control-Your
 
 ## Cutting a release
 
-1. Edit `cy-user-login-watcher/readme.txt`: add a `= X.Y.Z =` entry under `== Changelog ==` (and bump `Tested up to` if you tested on a newer WordPress).
-2. Run
+Which sites get a release is decided by one file. Client sites read `update.json` from the `main` branch. Test sites read it from the `staging` branch (see "Test sites" below). The tag, the GitHub Release and the version bump on `main` reach nobody by themselves.
+
+1. Edit `cy-user-login-watcher/readme.txt`: add a `= X.Y.Z =` entry under `== Changelog ==` (and bump `Tested up to` if you tested on a newer WordPress). Commit it to `main`.
+2. Release to the test sites only:
 
    ```sh
-   bash bin/release.sh X.Y.Z --publish
+   bash bin/release.sh X.Y.Z --staging
    ```
 
-   This bumps the version in the plugin header, `CY_ULW_VERSION` and `Stable tag`; lints; builds `dist/cy-user-login-watcher-X.Y.Z.zip`; commits and tags `vX.Y.Z`; pushes; creates the GitHub Release with the zip attached; then regenerates and pushes `update.json`. The manifest is pushed **after** the release exists so no site ever sees a version it cannot download.
+   This bumps the version in the plugin header, `CY_ULW_VERSION` and `Stable tag`; lints; builds `dist/cy-user-login-watcher-X.Y.Z.zip`; commits and tags `vX.Y.Z`; pushes; creates the GitHub Release with the zip attached; then puts the new manifest on the `staging` branch. `main`'s `update.json` is not touched, so every other site stays on the version it has.
+3. Check the test sites. They pick the release up on their next update check, or at once with Dashboard > Updates > "Check again".
+4. Give it to everyone:
 
-   Without `--publish` it does everything locally and prints the git/gh commands instead.
+   ```sh
+   bash bin/release.sh X.Y.Z --promote
+   ```
+
+   This publishes the manifest on `main` and nothing else. It refuses if the plugin on `main` has changed since the tag, so what everyone gets is what was tested.
+
+If the test sites show a problem, do not promote. Fix it, add the next version's changelog entry, and run `--staging` with that version: the test sites move on to it, and sites on `main` skip the bad version altogether.
+
+`bash bin/release.sh X.Y.Z --publish` does steps 2 and 4 in one go, for a release that needs no trial. In every mode the manifest is pushed **after** the GitHub Release exists, so no site ever sees a version it cannot download. Without an option the script only builds locally and commits nothing.
+
+The `staging` branch is rebuilt by every `--staging` run (it is `main` plus the new manifest, force-pushed). Never merge it into anything or commit to it by hand.
 
 Requirements: macOS/Linux with `git`, `zip`, `perl` (all preinstalled on macOS) and the [GitHub CLI](https://cli.github.com) logged in (`gh auth login`).
 
@@ -51,15 +65,17 @@ bash bin/release.sh 1.0.0 --publish
 
 If the repo already exists, replace the `gh repo create` line with `git remote add origin git@github.com:Control-Yours/User-Login-Watcher-Plugin.git && git push -u origin main`.
 
-## Testing an update on one site
+## Test sites
 
-Point a single site at a different manifest (e.g. a `staging` branch) by adding to its `wp-config.php`:
+A site becomes a test site when its `wp-config.php` points it at the staging manifest:
 
 ```php
 define( 'CY_ULW_UPDATE_MANIFEST', 'https://raw.githubusercontent.com/Control-Yours/User-Login-Watcher-Plugin/staging/update.json' );
 ```
 
-Then Dashboard > Updates > "Check again" forces a fresh manifest fetch.
+It then follows `--staging` releases instead of `main`. Dashboard > Updates > "Check again" forces a fresh manifest fetch. Keep the line in place on the few sites used for trials; remove it to put a site back on the normal channel.
+
+The `staging` branch does not exist until the first `--staging` release. Until then a site with this line finds no manifest, keeps its current version, and updates nothing.
 
 ## Site inventory payload
 
