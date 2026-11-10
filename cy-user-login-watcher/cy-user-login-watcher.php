@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name:       CY User Login Watcher
+ * Plugin Name:       Control Yours Connector
  * Plugin URI:        https://github.com/Control-Yours/User-Login-Watcher-Plugin
- * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only. Also switches off the theme and plugin file editors (Settings > Login Watcher).
+ * Description:       Records each user's last login and last admin activity, adds a sortable "Last Login" column to the Users screen, and lists recent logins in a Dashboard widget. Visible to administrators only. Switches off the theme and plugin file editors, reports logins to the Control Yours Admin Dashboard, and sends a site inventory when the dashboard asks for one (Settings > CY Connector).
  * Version:           1.4.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
@@ -34,6 +34,11 @@
  *    that send logins and activity to the Control Yours Admin Dashboard as
  *    they happen (non-blocking) and a daily snapshot from cron. It does
  *    nothing on a front-end page view.
+ *  - The site inventory cron event and the settings screen only:
+ *    includes/class-cy-ulw-inventory.php, included by cy_ulw_load_inventory()
+ *    when an inventory has been asked for and its one-off cron event runs, or
+ *    when an administrator opens Settings > CY Connector. Every other request
+ *    pays for one hook registration.
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -47,7 +52,10 @@ define( 'CY_ULW_SLUG', 'cy-user-login-watcher' );
 /** GitHub repository that hosts releases and the update manifest (owner/repo). */
 define( 'CY_ULW_GITHUB_REPO', 'Control-Yours/User-Login-Watcher-Plugin' );
 
-/** Option holding the settings from Settings > Login Watcher (one small autoloaded array). */
+/** One-off WP-cron hook that builds and sends the site inventory; see CY_ULW_Inventory. */
+define( 'CY_ULW_INVENTORY_HOOK', 'cy_ulw_inventory_run' );
+
+/** Option holding the settings from Settings > CY Connector (one small autoloaded array). */
 define( 'CY_ULW_SETTINGS_OPTION', 'cy_ulw_settings' );
 
 /**
@@ -68,7 +76,7 @@ function cy_ulw_default_settings() {
  * Roles the plugin recognises as people who work in a site, and therefore
  * tracks by default. Anything else (subscribers, customers, members, agents,
  * dealers, portal clients and whatever a plugin invents) stays untracked until
- * someone ticks it under Settings > Login Watcher on that site.
+ * someone ticks it under Settings > CY Connector on that site.
  *
  * @return string[] Role slugs.
  */
@@ -352,6 +360,25 @@ CY_ULW_Reporter::init();
 
 register_activation_hook( __FILE__, array( 'CY_ULW_Reporter', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'CY_ULW_Reporter', 'deactivate' ) );
+
+/**
+ * Include the site inventory class. Called when its cron event runs, when the
+ * dashboard asks for an inventory (from the daily snapshot, in cron) and on the
+ * settings screen; nothing else needs the file.
+ */
+function cy_ulw_load_inventory() {
+	require_once CY_ULW_DIR . '/includes/class-cy-ulw-inventory.php';
+}
+
+/**
+ * Run the site inventory. Hooked to the one-off cy_ulw_inventory_run cron
+ * event, which exists only after an inventory was asked for.
+ */
+function cy_ulw_run_inventory() {
+	cy_ulw_load_inventory();
+	CY_ULW_Inventory::run();
+}
+add_action( CY_ULW_INVENTORY_HOOK, 'cy_ulw_run_inventory' );
 
 // File editor switch: the editors are wp-admin screens and save through admin-ajax.
 if ( is_admin() ) {

@@ -16,7 +16,7 @@
  *
  * Switches: define CY_ULW_DASHBOARD_REPORTING as false in wp-config.php to
  * send nothing from a site, CY_ULW_DASHBOARD_URL to point it at another
- * dashboard, or untick the box under Settings > Login Watcher. Staging,
+ * dashboard, or untick the box under Settings > CY Connector. Staging,
  * development and local copies (home URL on wpenginepowered.com,
  * wpengine.com, .local, .test, .localhost or localhost, or environment type
  * "local" or "development") send nothing unless CY_ULW_DASHBOARD_REPORTING
@@ -47,6 +47,18 @@ final class CY_ULW_Reporter {
 	 * Intake endpoint, unless CY_ULW_DASHBOARD_URL overrides it.
 	 */
 	const DEFAULT_URL = 'https://admin.controlyours.com/api/logins/intake';
+
+	/**
+	 * Path of the intake endpoint. base_url() strips it from endpoint() to
+	 * find where the dashboard lives, so other paths can be posted to.
+	 */
+	const INTAKE_PATH = '/api/logins/intake';
+
+	/**
+	 * Largest snapshot response body that is read for dashboard requests.
+	 * The real answer is a few dozen bytes; anything bigger is not ours.
+	 */
+	const MAX_RESPONSE_BYTES = 65536;
 
 	/**
 	 * Length of the generated site key (32 random bytes as base64url).
@@ -181,6 +193,29 @@ final class CY_ULW_Reporter {
 			return (string) CY_ULW_DASHBOARD_URL;
 		}
 		return self::DEFAULT_URL;
+	}
+
+	/**
+	 * The dashboard's address without the intake path, for posting to its
+	 * other endpoints: endpoint() minus the trailing /api/logins/intake, so
+	 * CY_ULW_DASHBOARD_URL moves every request at once. When an override does
+	 * not end in that path there is no telling where the rest of that
+	 * dashboard lives, so nothing is guessed.
+	 *
+	 * @return string Without a trailing slash; '' when it cannot be worked out.
+	 */
+	public static function base_url() {
+		$parts = wp_parse_url( self::endpoint() );
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return '';
+		}
+
+		$path = isset( $parts['path'] ) ? rtrim( (string) $parts['path'], '/' ) : '';
+		if ( ! self::ends_with( $path, self::INTAKE_PATH ) ) {
+			return '';
+		}
+
+		return $parts['scheme'] . '://' . $parts['host'] . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' ) . substr( $path, 0, -strlen( self::INTAKE_PATH ) );
 	}
 
 	/**
@@ -328,7 +363,7 @@ final class CY_ULW_Reporter {
 		/**
 		 * Filter whether this site sends login data to the Admin Dashboard.
 		 *
-		 * @param bool $enabled Default: true unless the box under Settings > Login Watcher
+		 * @param bool $enabled Default: true unless the box under Settings > CY Connector
 		 *                      is unticked. The CY_ULW_DASHBOARD_REPORTING constant and the
 		 *                      staging check (see looks_like_staging()) win over this filter.
 		 */
@@ -438,11 +473,41 @@ final class CY_ULW_Reporter {
 			}
 
 			self::save( $config );
+
+			if ( $ok ) {
+				self::handle_requests( $response );
+			}
 		} catch ( Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
 			// Never let a reporting failure surface in cron output.
 		}
 
 		return $ok;
+	}
+
+	/**
+	 * Act on what the dashboard asked for in its answer to an accepted
+	 * snapshot. The body may carry {"requests": ["inventory"]}; that queues a
+	 * site inventory (see CY_ULW_Inventory). An empty body, anything that is
+	 * not a JSON object, a missing or non-list "requests" and values this
+	 * version does not know all change nothing.
+	 *
+	 * @param array $response wp_remote_post() result of an accepted snapshot.
+	 */
+	private static function handle_requests( $response ) {
+		$body = wp_remote_retrieve_body( $response );
+		if ( ! is_string( $body ) || '' === $body || strlen( $body ) > self::MAX_RESPONSE_BYTES ) {
+			return;
+		}
+
+		$data = json_decode( $body, true );
+		if ( ! is_array( $data ) || ! isset( $data['requests'] ) || ! is_array( $data['requests'] ) ) {
+			return;
+		}
+
+		if ( in_array( 'inventory', $data['requests'], true ) ) {
+			cy_ulw_load_inventory();
+			CY_ULW_Inventory::request( 'dashboard' );
+		}
 	}
 
 	/**
@@ -518,10 +583,11 @@ final class CY_ULW_Reporter {
 	}
 
 	/**
-	 * Remove the daily snapshot event.
+	 * Remove the daily snapshot event and a pending site inventory run.
 	 */
 	public static function unschedule() {
 		wp_clear_scheduled_hook( self::CRON_HOOK );
+		wp_clear_scheduled_hook( CY_ULW_INVENTORY_HOOK );
 	}
 
 	/**
@@ -599,11 +665,52 @@ final class CY_ULW_Reporter {
 			return new WP_Error( 'cy_ulw_json', 'Could not encode the report as JSON.' );
 		}
 
+		return self::request( self::endpoint(), $body, $site_key, $blocking, $blocking ? 10 : 3 );
+	}
+
+	/**
+	 * POST a ready-made JSON body to another path on the dashboard, with this
+	 * site's key, and wait for the answer. For anything that is not a user
+	 * report (the site inventory). Obeys the same switches as every other
+	 * request: when reporting is off, or this is a staging or local copy,
+	 * nothing is sent. Never touches the reporter's own status.
+	 *
+	 * @param string $path    Path on the dashboard, e.g. '/api/sites/inventory'.
+	 * @param string $json    Request body, already JSON-encoded.
+	 * @param int    $timeout Seconds to wait for the response.
+	 * @return array|WP_Error wp_remote_post() result, or an error when nothing was sent.
+	 */
+	public static function post_json( $path, $json, $timeout = 15 ) {
+		if ( ! self::is_enabled() ) {
+			return new WP_Error( 'cy_ulw_disabled', 'Dashboard reporting is switched off for this site.' );
+		}
+
+		$base = self::base_url();
+		if ( '' === $base ) {
+			return new WP_Error( 'cy_ulw_url', 'The dashboard address (CY_ULW_DASHBOARD_URL) does not end in ' . self::INTAKE_PATH . ', so the address for this request cannot be worked out.' );
+		}
+
+		$config = self::config();
+
+		return self::request( $base . '/' . ltrim( (string) $path, '/' ), (string) $json, $config['site_key'], true, max( 1, (int) $timeout ) );
+	}
+
+	/**
+	 * The one place a request to the dashboard is made.
+	 *
+	 * @param string $url      Full URL.
+	 * @param string $body     JSON body.
+	 * @param string $site_key This site's key, sent as the X-CY-Site-Key header.
+	 * @param bool   $blocking Wait for the response or fire and forget.
+	 * @param int    $timeout  Seconds.
+	 * @return array|WP_Error wp_remote_post() result.
+	 */
+	private static function request( $url, $body, $site_key, $blocking, $timeout ) {
 		return wp_remote_post(
-			self::endpoint(),
+			$url,
 			array(
 				'blocking'    => (bool) $blocking,
-				'timeout'     => $blocking ? 10 : 3,
+				'timeout'     => (int) $timeout,
 				// A redirect is never a valid intake answer. Following one would turn
 				// a Cloudflare Access login page (302) into a misleading "200 OK".
 				'redirection' => 0,

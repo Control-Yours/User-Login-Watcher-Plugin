@@ -7,7 +7,7 @@
  * WP Engine's wp-config.php defines DISALLOW_FILE_EDIT as false, so on most
  * Control Yours sites any administrator could edit PHP on the server from the
  * browser, which turns one stolen admin login into a site takeover. On by
- * default; untick it under Settings > Login Watcher, or return false from the
+ * default; untick it under Settings > CY Connector, or return false from the
  * cy_ulw_disable_file_editor filter. DISALLOW_FILE_EDIT set to true still wins.
  *
  * Loaded on wp-admin and admin-ajax requests only: the editors and their save

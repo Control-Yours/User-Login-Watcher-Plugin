@@ -54,7 +54,7 @@ final class CY_ULW_Admin {
 			return true;
 		}
 
-		// Extra roles allowed by Settings > Login Watcher.
+		// Extra roles allowed by Settings > CY Connector.
 		$user = wp_get_current_user();
 		return $user && $user->ID && (bool) array_intersect( (array) $user->roles, (array) cy_ulw_setting( 'view_roles' ) );
 	}
@@ -144,7 +144,7 @@ final class CY_ULW_Admin {
 		$active = (int) get_user_meta( $user_id, CY_ULW_Tracker::META_LAST_ACTIVE, true );
 
 		if ( ! $login && ! CY_ULW_Tracker::is_tracked_role( $user_id ) ) {
-			return '<span class="cy-ulw-never" title="' . esc_attr__( 'This user holds no tracked role. Tick the role under Settings > Login Watcher to track it.', 'cy-user-login-watcher' ) . '">' . esc_html__( 'Not tracked', 'cy-user-login-watcher' ) . '</span>';
+			return '<span class="cy-ulw-never" title="' . esc_attr__( 'This user holds no tracked role. Tick the role under Settings > CY Connector to track it.', 'cy-user-login-watcher' ) . '">' . esc_html__( 'Not tracked', 'cy-user-login-watcher' ) . '</span>';
 		}
 
 		if ( ! $login ) {
