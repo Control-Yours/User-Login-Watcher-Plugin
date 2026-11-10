@@ -20,7 +20,7 @@
  * yes/no flags derived from the active plugins. What is never collected:
  * users, form entries, orders, customers, option values and post content.
  * Page content is tested for builder markup inside the database query and is
- * never loaded here.
+ * not read by this class.
  *
  * It is sent as a series of JSON chunks, each under 1 MB, sharing one
  * inventory ID and numbered from 1; the last chunk is marked complete. A run
@@ -97,8 +97,8 @@ final class CY_ULW_Inventory {
 	const MAX_RUNS = 200;
 
 	/**
-	 * Seconds after which a queued or running inventory that shows no sign of
-	 * life counts as dead, so a new request may replace it.
+	 * Seconds after which a running inventory that shows no sign of life
+	 * counts as dead, so a new request may replace it.
 	 */
 	const STALE_AFTER = 900;
 
@@ -150,6 +150,21 @@ final class CY_ULW_Inventory {
 	 */
 	private static $state = array();
 
+	/**
+	 * True while run() is at work, so on_shutdown() can tell a run that was
+	 * cut short from one that ended by itself.
+	 *
+	 * @var bool
+	 */
+	private static $running = false;
+
+	/**
+	 * Whether on_shutdown() has been registered in this request.
+	 *
+	 * @var bool
+	 */
+	private static $guarded = false;
+
 	/* ---------------------------------------------------------------------
 	 * State
 	 * ------------------------------------------------------------------ */
@@ -196,16 +211,24 @@ final class CY_ULW_Inventory {
 	}
 
 	/**
-	 * Whether an inventory is queued or under way and still showing signs of life.
+	 * Whether an inventory is really waiting or under way. A queued or paused
+	 * one is alive for as long as its cron event exists, however long cron
+	 * takes to come round; without the event (the plugin was switched off and
+	 * on again) it will never run. A running one is alive while its heartbeat
+	 * is recent.
 	 *
 	 * @param array $state State array.
 	 * @return bool
 	 */
 	private static function is_active( array $state ) {
-		if ( ! in_array( $state['status'], array( 'queued', 'running', 'paused' ), true ) ) {
-			return false;
+		switch ( $state['status'] ) {
+			case 'queued':
+			case 'paused':
+				return (bool) wp_next_scheduled( CY_ULW_INVENTORY_HOOK );
+			case 'running':
+				return (int) $state['heartbeat'] > time() - self::STALE_AFTER;
 		}
-		return max( (int) $state['requested_at'], (int) $state['heartbeat'] ) > time() - self::STALE_AFTER;
+		return false;
 	}
 
 	/* ---------------------------------------------------------------------
@@ -240,8 +263,8 @@ final class CY_ULW_Inventory {
 			$state = self::$state;
 		}
 
-		// A run in progress needs no event; a queued or paused one does, and
-		// may have lost it (the plugin was switched off and on again).
+		// A run in progress needs no event. Anything else here is queued, new
+		// or old, and schedule() leaves an event that already exists alone.
 		if ( 'running' !== $state['status'] ) {
 			self::schedule();
 		}
@@ -297,6 +320,13 @@ final class CY_ULW_Inventory {
 
 		$started = microtime( true );
 
+		// try/catch cannot see a memory or time limit; a shutdown function can.
+		self::$running = true;
+		if ( ! self::$guarded ) {
+			self::$guarded = true;
+			register_shutdown_function( array( __CLASS__, 'on_shutdown' ) );
+		}
+
 		try {
 			while ( true ) {
 				if ( self::step() ) {
@@ -323,6 +353,34 @@ final class CY_ULW_Inventory {
 			self::finish( 'failed', $message );
 		} catch ( Throwable $e ) {
 			self::finish( 'failed', 'Stopped by an error in the plugin: ' . self::short( $e->getMessage() ) );
+		} finally {
+			self::$running = false;
+		}
+	}
+
+	/**
+	 * Record a run that PHP ended from outside (memory limit, time limit, a
+	 * fatal error in other code), so the settings screen says what happened
+	 * and the inventory can be asked for again at once.
+	 */
+	public static function on_shutdown() {
+		if ( ! self::$running ) {
+			return;
+		}
+		self::$running = false;
+
+		try {
+			$error   = error_get_last();
+			$message = 'The background run was stopped by PHP before it finished';
+			if ( is_array( $error ) && ! empty( $error['message'] ) ) {
+				$message .= ': ' . self::short( $error['message'] );
+			}
+			if ( (int) self::$state['chunk'] > 0 ) {
+				$message .= '. The dashboard holds an incomplete inventory';
+			}
+			self::finish( 'failed', $message . '.' );
+		} catch ( Throwable $e ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+			// Nothing more can be done this late.
 		}
 	}
 
@@ -357,8 +415,10 @@ final class CY_ULW_Inventory {
 
 			case 'pages':
 				$pages = self::pages( (int) self::$state['after_id'] );
-				if ( $pages ) {
+				if ( $pages || 0 === (int) self::$state['after_id'] ) {
 					self::send_list( 'pages', $pages );
+				}
+				if ( $pages ) {
 					self::$state['after_id'] = (int) $pages[ count( $pages ) - 1 ]['id'];
 					self::$state['pages']    = (int) self::$state['pages'] + count( $pages );
 				}
@@ -423,25 +483,33 @@ final class CY_ULW_Inventory {
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * Send one list section, split over as many chunks as it takes to keep
-	 * each under the size limit.
+	 * Send one list section, over as many chunks as it takes to keep each
+	 * under the size limit. An empty list is sent too, so the section is
+	 * always present.
 	 *
 	 * @param string $section Key under "data", e.g. 'pages'.
 	 * @param array  $items   List of entries.
 	 * @throws RuntimeException When a chunk cannot be sent or is not accepted.
 	 */
 	private static function send_list( $section, array $items ) {
-		$items = array_values( $items );
-		$count = count( $items );
+		$limit = self::MAX_CHUNK_BYTES - 2000; // Room for the envelope around the list.
+		$group = array();
+		$size  = 0;
 
-		if ( $count > 1 && strlen( (string) wp_json_encode( $items ) ) > self::MAX_CHUNK_BYTES - 2000 ) {
-			$half = (int) ceil( $count / 2 );
-			self::send_list( $section, array_slice( $items, 0, $half ) );
-			self::send_list( $section, array_slice( $items, $half ) );
-			return;
+		foreach ( $items as $item ) {
+			$length = strlen( (string) wp_json_encode( $item ) ) + 1;
+
+			if ( $group && $size + $length > $limit ) {
+				self::send( array( $section => $group ) );
+				$group = array();
+				$size  = 0;
+			}
+
+			$group[] = $item;
+			$size   += $length;
 		}
 
-		self::send( array( $section => $items ) );
+		self::send( array( $section => $group ) );
 	}
 
 	/**
@@ -484,6 +552,10 @@ final class CY_ULW_Inventory {
 
 		if ( is_wp_error( $response ) ) {
 			self::$state['code'] = 0;
+			if ( in_array( $response->get_error_code(), array( 'cy_ulw_disabled', 'cy_ulw_url' ), true ) ) {
+				// Nothing was sent; the reporter's message says why.
+				throw new RuntimeException( $response->get_error_message() );
+			}
 			throw new RuntimeException( 'No answer from the dashboard: ' . self::short( $response->get_error_message() ) );
 		}
 
@@ -531,9 +603,10 @@ final class CY_ULW_Inventory {
 	 * @return string
 	 */
 	private static function short( $message, $length = 160 ) {
-		$message = trim( wp_strip_all_tags( (string) $message ) );
-		if ( strlen( $message ) > $length ) {
-			$message = substr( $message, 0, $length - 3 ) . '...';
+		// Whole characters only: text cut mid-character cannot be saved in the option.
+		$message = trim( wp_strip_all_tags( wp_check_invalid_utf8( (string) $message, true ) ) );
+		if ( mb_strlen( $message ) > $length ) {
+			$message = mb_substr( $message, 0, $length - 3 ) . '...';
 		}
 		return $message;
 	}
@@ -556,6 +629,13 @@ final class CY_ULW_Inventory {
 
 		switch ( $state['status'] ) {
 			case 'queued':
+				if ( ! self::is_active( $state ) ) {
+					return sprintf(
+						/* translators: %s: time difference, e.g. "3 hours". */
+						__( 'An inventory was asked for %s ago but its background run is no longer scheduled, so it was not sent. It can be sent again.', 'cy-user-login-watcher' ),
+						human_time_diff( min( $now, (int) $state['requested_at'] ), $now )
+					);
+				}
 				return sprintf(
 					/* translators: 1: time difference, e.g. "3 mins", 2: who asked. */
 					__( 'Asked for %1$s ago %2$s. Waiting for the next background run, usually within a few minutes.', 'cy-user-login-watcher' ),
@@ -569,7 +649,7 @@ final class CY_ULW_Inventory {
 					return sprintf(
 						/* translators: %s: time difference, e.g. "3 hours". */
 						__( 'The last inventory stopped without finishing %s ago. Nothing else is affected; it can be sent again.', 'cy-user-login-watcher' ),
-						human_time_diff( min( $now, (int) $state['heartbeat'] ), $now )
+						human_time_diff( min( $now, max( (int) $state['heartbeat'], (int) $state['requested_at'] ) ), $now )
 					);
 				}
 				return sprintf(
@@ -777,8 +857,9 @@ final class CY_ULW_Inventory {
 	}
 
 	/**
-	 * Media library: how many items and how many bytes the original files take.
-	 * Generated image sizes are not counted. The size comes from the stored
+	 * Media library: how many items, and how many bytes their main files take.
+	 * The main file is the one WordPress serves as "full size"; the smaller
+	 * image sizes it generates are not counted. The size comes from the stored
 	 * attachment details and, for older uploads without one, from the file on
 	 * disk. On a very large library the count stops after a few seconds and
 	 * says so.
@@ -823,9 +904,11 @@ final class CY_ULW_Inventory {
 			foreach ( (array) $rows as $row ) {
 				if ( '_wp_attached_file' === $row->meta_key ) {
 					$files[ (int) $row->post_id ] = (string) $row->meta_value;
-				} elseif ( preg_match( '/s:8:"filesize";i:(\d+);/', (string) $row->meta_value, $match ) ) {
-					// The first "filesize" in the stored details is the original file's.
-					$sizes[ (int) $row->post_id ] = (int) $match[1];
+				} else {
+					$size = self::stored_filesize( (string) $row->meta_value );
+					if ( $size > 0 ) {
+						$sizes[ (int) $row->post_id ] = $size;
+					}
 				}
 			}
 			unset( $rows );
@@ -844,11 +927,13 @@ final class CY_ULW_Inventory {
 				}
 			}
 
-			if ( microtime( true ) - $started > self::MEDIA_SECONDS ) {
+			$more = count( $ids ) === self::MEDIA_BATCH;
+
+			if ( $more && microtime( true ) - $started > self::MEDIA_SECONDS ) {
 				$complete = false;
 				break;
 			}
-		} while ( count( $ids ) === self::MEDIA_BATCH );
+		} while ( $more );
 
 		return array(
 			'count'          => $count,
@@ -856,6 +941,22 @@ final class CY_ULW_Inventory {
 			'files_measured' => $measured,
 			'bytes_complete' => $complete,
 		);
+	}
+
+	/**
+	 * The main file's size as WordPress stored it with the attachment (since
+	 * 6.0), or 0. Only the top-level value counts: the same key also appears
+	 * under each generated size, and for a PDF those come first.
+	 *
+	 * @param string $value Raw _wp_attachment_metadata value.
+	 * @return int Bytes.
+	 */
+	private static function stored_filesize( $value ) {
+		if ( false === strpos( $value, '"filesize"' ) ) {
+			return 0;
+		}
+		$data = @unserialize( $value, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- Core's own array, read without instantiating anything; a broken value is simply not counted.
+		return is_array( $data ) && isset( $data['filesize'] ) && is_numeric( $data['filesize'] ) ? (int) $data['filesize'] : 0;
 	}
 
 	/**
@@ -872,31 +973,116 @@ final class CY_ULW_Inventory {
 		$menus = array();
 
 		foreach ( (array) wp_get_nav_menus() as $menu ) {
-			$items = array();
-			$found = wp_get_nav_menu_items( $menu->term_id, array( 'update_post_term_cache' => false ) );
-
-			foreach ( is_array( $found ) ? $found : array() as $item ) {
-				$items[] = array(
-					'id'        => (int) $item->ID,
-					'label'     => self::plain( $item->title ),
-					'url'       => (string) $item->url,
-					'type'      => (string) $item->type,      // post_type, taxonomy, custom or post_type_archive.
-					'object'    => (string) $item->object,    // e.g. page, category, custom.
-					'object_id' => (int) $item->object_id,    // The page or term the item points at; the item's own ID for a custom link.
-					'parent'    => (int) $item->menu_item_parent,
-				);
-			}
-
 			$menus[] = array(
 				'id'        => (int) $menu->term_id,
 				'name'      => self::plain( $menu->name ),
 				'slug'      => (string) $menu->slug,
 				'locations' => isset( $locations[ (int) $menu->term_id ] ) ? $locations[ (int) $menu->term_id ] : array(),
-				'items'     => $items,
+				'items'     => self::menu_items( (int) $menu->term_id ),
 			);
 		}
 
 		return $menus;
+	}
+
+	/**
+	 * The items of one menu, in menu order.
+	 *
+	 * Read straight from the database instead of with wp_get_nav_menu_items(),
+	 * which loads every page a menu links to together with all of its meta
+	 * (megabytes of layout data on a page-builder site). An item follows the
+	 * same rules as in WordPress: its own label wins, otherwise the title of
+	 * what it points at; an item whose target no longer exists is left out.
+	 *
+	 * @param int $menu_id Menu term ID.
+	 * @return array[]
+	 */
+	private static function menu_items( $menu_id ) {
+		global $wpdb;
+
+		$ids = get_objects_in_term( $menu_id, 'nav_menu' );
+		$ids = is_array( $ids ) ? array_filter( array_map( 'intval', $ids ) ) : array();
+		if ( ! $ids ) {
+			return array();
+		}
+		$in = implode( ',', $ids );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Every ID list below is made of integers.
+		$rows = $wpdb->get_results(
+			"SELECT ID, post_title FROM {$wpdb->posts} WHERE ID IN ($in) AND post_type = 'nav_menu_item' AND post_status = 'publish' ORDER BY menu_order ASC, ID ASC"
+		);
+
+		$meta      = array();
+		$meta_rows = $wpdb->get_results(
+			"SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN ($in) AND meta_key IN ('_menu_item_type', '_menu_item_menu_item_parent', '_menu_item_object_id', '_menu_item_object', '_menu_item_url')"
+		);
+		foreach ( (array) $meta_rows as $row ) {
+			$meta[ (int) $row->post_id ][ (string) $row->meta_key ] = (string) $row->meta_value;
+		}
+
+		// The posts and pages the items point at: a few small columns, no content.
+		$targets    = array();
+		$target_ids = array();
+		foreach ( $meta as $item_meta ) {
+			if ( isset( $item_meta['_menu_item_type'], $item_meta['_menu_item_object_id'] ) && 'post_type' === $item_meta['_menu_item_type'] && (int) $item_meta['_menu_item_object_id'] > 0 ) {
+				$target_ids[] = (int) $item_meta['_menu_item_object_id'];
+			}
+		}
+		if ( $target_ids ) {
+			$target_rows = $wpdb->get_results(
+				"SELECT ID, post_title, post_name, post_parent, post_type, post_status, post_date, post_date_gmt, post_author FROM {$wpdb->posts} WHERE ID IN (" . implode( ',', array_unique( $target_ids ) ) . ')'
+			);
+			foreach ( (array) $target_rows as $row ) {
+				$targets[ (int) $row->ID ] = $row;
+			}
+		}
+		// phpcs:enable
+
+		$items = array();
+
+		foreach ( (array) $rows as $row ) {
+			$id        = (int) $row->ID;
+			$item_meta = isset( $meta[ $id ] ) ? $meta[ $id ] : array();
+			$type      = isset( $item_meta['_menu_item_type'] ) ? $item_meta['_menu_item_type'] : '';
+			$object    = isset( $item_meta['_menu_item_object'] ) ? $item_meta['_menu_item_object'] : '';
+			$object_id = isset( $item_meta['_menu_item_object_id'] ) ? (int) $item_meta['_menu_item_object_id'] : 0;
+			$label     = (string) $row->post_title;
+			$url       = isset( $item_meta['_menu_item_url'] ) && '' !== $item_meta['_menu_item_url'] ? $item_meta['_menu_item_url'] : null;
+
+			if ( 'post_type' === $type ) {
+				if ( ! isset( $targets[ $object_id ] ) || 'trash' === $targets[ $object_id ]->post_status ) {
+					continue;
+				}
+				$label = '' !== $label ? $label : (string) $targets[ $object_id ]->post_title;
+				$url   = get_permalink( self::bare_post( $targets[ $object_id ] ) );
+			} elseif ( 'taxonomy' === $type ) {
+				$term = get_term( $object_id, $object );
+				if ( ! $term || is_wp_error( $term ) ) {
+					continue;
+				}
+				$label = '' !== $label ? $label : (string) $term->name;
+				$url   = get_term_link( $term );
+			} elseif ( 'post_type_archive' === $type ) {
+				$post_type = get_post_type_object( $object );
+				if ( ! $post_type ) {
+					continue;
+				}
+				$label = '' !== $label ? $label : (string) $post_type->labels->archives;
+				$url   = get_post_type_archive_link( $object );
+			}
+
+			$items[] = array(
+				'id'        => $id,
+				'label'     => self::plain( $label ),
+				'url'       => is_string( $url ) && '' !== $url ? $url : null,
+				'type'      => (string) $type,   // post_type, taxonomy, post_type_archive or custom.
+				'object'    => (string) $object, // e.g. page, category, custom.
+				'object_id' => $object_id,       // The page or term the item points at; the item's own ID for a custom link.
+				'parent'    => isset( $item_meta['_menu_item_menu_item_parent'] ) ? (int) $item_meta['_menu_item_menu_item_parent'] : 0,
+			);
+		}
+
+		return $items;
 	}
 
 	/**
@@ -982,23 +1168,32 @@ final class CY_ULW_Inventory {
 	}
 
 	/**
-	 * A post object carrying only what get_permalink() needs, and no content.
+	 * A post object carrying only what get_permalink() needs, and no content,
+	 * so WordPress works out the address without loading the real post.
 	 *
-	 * @param object $row Row from the query in pages().
+	 * @param object $row Row with ID, post_title, post_name and post_parent;
+	 *                    a published page unless it says otherwise.
 	 * @return WP_Post
 	 */
 	private static function bare_post( $row ) {
-		return new WP_Post(
-			(object) array(
-				'ID'          => (int) $row->ID,
-				'post_type'   => 'page',
-				'post_status' => 'publish',
-				'post_title'  => (string) $row->post_title,
-				'post_name'   => (string) $row->post_name,
-				'post_parent' => (int) $row->post_parent,
-				'filter'      => 'raw', // Already "sanitized": get_post() hands the object back untouched.
-			)
+		$fields = array(
+			'ID'          => (int) $row->ID,
+			'post_type'   => isset( $row->post_type ) ? (string) $row->post_type : 'page',
+			'post_status' => isset( $row->post_status ) ? (string) $row->post_status : 'publish',
+			'post_title'  => (string) $row->post_title,
+			'post_name'   => (string) $row->post_name,
+			'post_parent' => (int) $row->post_parent,
+			'filter'      => 'raw', // Already "sanitized": get_post() hands the object back untouched.
 		);
+
+		// Date and author appear in the addresses of posts, not pages.
+		foreach ( array( 'post_date', 'post_date_gmt', 'post_author' ) as $field ) {
+			if ( isset( $row->$field ) ) {
+				$fields[ $field ] = (string) $row->$field;
+			}
+		}
+
+		return new WP_Post( (object) $fields );
 	}
 
 	/**

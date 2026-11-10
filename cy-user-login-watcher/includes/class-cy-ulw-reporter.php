@@ -197,11 +197,12 @@ final class CY_ULW_Reporter {
 
 	/**
 	 * The dashboard's address without the intake path, for posting to its
-	 * other endpoints: endpoint() minus a trailing /api/logins/intake, so
-	 * CY_ULW_DASHBOARD_URL moves every request at once. An override that does
-	 * not end in that path gives its scheme, host and port only.
+	 * other endpoints: endpoint() minus the trailing /api/logins/intake, so
+	 * CY_ULW_DASHBOARD_URL moves every request at once. When an override does
+	 * not end in that path there is no telling where the rest of that
+	 * dashboard lives, so nothing is guessed.
 	 *
-	 * @return string Without a trailing slash; '' when endpoint() is not a URL.
+	 * @return string Without a trailing slash; '' when it cannot be worked out.
 	 */
 	public static function base_url() {
 		$parts = wp_parse_url( self::endpoint() );
@@ -209,14 +210,12 @@ final class CY_ULW_Reporter {
 			return '';
 		}
 
-		$base = $parts['scheme'] . '://' . $parts['host'] . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' );
 		$path = isset( $parts['path'] ) ? rtrim( (string) $parts['path'], '/' ) : '';
-
-		if ( self::ends_with( $path, self::INTAKE_PATH ) ) {
-			$base .= substr( $path, 0, -strlen( self::INTAKE_PATH ) );
+		if ( ! self::ends_with( $path, self::INTAKE_PATH ) ) {
+			return '';
 		}
 
-		return $base;
+		return $parts['scheme'] . '://' . $parts['host'] . ( isset( $parts['port'] ) ? ':' . (int) $parts['port'] : '' ) . substr( $path, 0, -strlen( self::INTAKE_PATH ) );
 	}
 
 	/**
@@ -688,7 +687,7 @@ final class CY_ULW_Reporter {
 
 		$base = self::base_url();
 		if ( '' === $base ) {
-			return new WP_Error( 'cy_ulw_url', 'The dashboard address is not a valid URL.' );
+			return new WP_Error( 'cy_ulw_url', 'The dashboard address (CY_ULW_DASHBOARD_URL) does not end in ' . self::INTAKE_PATH . ', so the address for this request cannot be worked out.' );
 		}
 
 		$config = self::config();

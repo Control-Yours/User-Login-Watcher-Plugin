@@ -32,7 +32,7 @@ Internal Control Yours plugin, called CY User Login Watcher until version 1.5.0.
 * Users screen and Dashboard: the column reads from the meta cache the list table already primed (no extra queries per row). The widget runs a handful of indexed queries and only for administrators viewing the Dashboard.
 * Update checks: piggyback on WordPress core's own schedule (cron twice daily, admin at most hourly), fetch one ~1 KB JSON file and cache it for 6 hours. Never on the front end.
 * Dashboard reporting: one small non-blocking HTTP request per login and per "last active" write (so at most one every 15 minutes per user), plus one blocking request a day from cron carrying every tracked user. Logins are recorded before the request is made and regardless of its outcome.
-* Site inventory: nothing at all until one is asked for; its code is not even loaded outside the cron run and the settings screen. A run reads pages 200 at a time without loading their content, sends a handful of requests from cron, and pauses and continues in a later cron run if it has used 20 seconds or 70% of the PHP memory limit.
+* Site inventory: nothing at all until one is asked for; its code is not even loaded outside the cron run and the settings screen. A run reads pages and menus with small queries of its own, 200 pages at a time, without loading page content or page-builder data, sends a handful of requests from cron, and pauses and continues in a later cron run if it has used 20 seconds or 70% of the PHP memory limit.
 
 == Data stored ==
 
@@ -64,12 +64,12 @@ Sent (as `inventory_version` 1):
 * Content types: each public post type with its number of published items and whether it is built in.
 * Pages: for each published page its ID, title, slug, parent, menu order, template, URL, last modified date, whether it is the front page or the posts page, and the builder it was made with (Elementor, WPBakery, Divi, Beaver Builder, blocks or classic).
 * Menus: each menu, the theme locations it is assigned to, and its items (label, target, parent).
-* Media: the number of items and the total size of the original files. No file is uploaded or listed.
+* Media: the number of items and the total size of their main files (not the smaller image sizes WordPress generates). No file is uploaded or listed.
 * Flags worked out from the active plugins: WooCommerce, a learning plugin, a forum, a multilingual plugin, form payments, an events plugin, and whether the site has a blog (six or more published posts).
 
 Never sent: users, form entries, orders, customers, subscribers, passwords, keys, the value of any setting other than the site details listed above, and the content of any page or post. Page content is checked for builder markup inside the database query and is not read by the plugin.
 
-The inventory is a series of JSON `POST` requests to `https://admin.controlyours.com/api/sites/inventory`, each under 1 MB, with the same `X-CY-Site-Key` header as login reports. `CY_ULW_DASHBOARD_URL` moves it together with the login reports: the inventory goes to the same address with `/api/logins/intake` replaced by `/api/sites/inventory`. The switches that stop login reporting (the settings checkbox, `CY_ULW_DASHBOARD_REPORTING`, the staging and local copy rules, the `cy_ulw_reporting_enabled` filter) stop the inventory too. If the dashboard refuses a part or cannot be reached, the inventory stops, the reason is shown under Settings > CY Connector, and login reporting carries on as before. The payload is documented in the repository's README.
+The inventory is a series of JSON `POST` requests to `https://admin.controlyours.com/api/sites/inventory`, each under 1 MB, with the same `X-CY-Site-Key` header as login reports. `CY_ULW_DASHBOARD_URL` moves it together with the login reports: the inventory goes to the same address with `/api/logins/intake` replaced by `/api/sites/inventory`. If that constant holds an address that does not end in `/api/logins/intake`, no inventory is sent and the settings screen says why. The switches that stop login reporting (the settings checkbox, `CY_ULW_DASHBOARD_REPORTING`, the staging and local copy rules, the `cy_ulw_reporting_enabled` filter) stop the inventory too. If the dashboard refuses a part or cannot be reached, or PHP stops the run, the inventory stops, the reason is shown under Settings > CY Connector, and login reporting carries on as before. The payload is documented in the repository's README.
 
 == Filters ==
 
@@ -93,7 +93,7 @@ Constant `CY_ULW_AUTO_UPDATE` (define in wp-config.php as `false`) — keep a si
 
 Constant `CY_ULW_DASHBOARD_REPORTING` (define in wp-config.php as `false` or `true`) — `false` sends nothing to the Admin Dashboard from this site; `true` reports from a staging, development or local copy that would otherwise be skipped. The settings checkbox is shown disabled when the constant is `false` and on a skipped copy.
 
-Constant `CY_ULW_DASHBOARD_URL` (define in wp-config.php) — send reports to a different intake URL, e.g. a local build of the dashboard. Give the full intake URL, ending in `/api/logins/intake`; the site inventory then goes to `/api/sites/inventory` on the same dashboard.
+Constant `CY_ULW_DASHBOARD_URL` (define in wp-config.php) — send reports to a different intake URL, e.g. a local build of the dashboard. Give the full intake URL, ending in `/api/logins/intake`; the site inventory then goes to `/api/sites/inventory` on the same dashboard, and is not sent at all when the URL ends in anything else.
 
 == Updates ==
 

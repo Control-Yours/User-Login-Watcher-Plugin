@@ -91,7 +91,7 @@ For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin se
 - `chunk` counts from 1 with no gaps, in the order sent. Chunks of one inventory can be minutes apart: a large site pauses and continues in a later cron run.
 - `complete` is `true` only on the last chunk, which has an empty `data` and adds `"totals": { "chunks": 9, "pages": 1009 }` (`chunks` includes the final one). An inventory whose final chunk never arrives is incomplete and should be discarded; the site does not resume it.
 - `requested_by` is `"dashboard"` or `"button"`.
-- `data` holds one or more sections. Treat sections as independent and merge by key: list sections (`pages`, `menus`) can be spread over several chunks and are concatenated in chunk order. Today chunk 1 carries the single-value sections, then `menus`, then `pages` in batches of up to 200, but do not rely on which chunk a section arrives in.
+- `data` holds one or more sections. Treat sections as independent and merge by key: list sections (`pages`, `menus`) can be spread over several chunks and are concatenated in chunk order. Both are always sent at least once, as an empty list on a site with none. Today chunk 1 carries the single-value sections, then `menus`, then `pages` in batches of up to 200, but do not rely on which chunk a section arrives in.
 
 **Sections in `data`:**
 
@@ -145,13 +145,13 @@ For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin se
 
 Field notes:
 
-- `site.logo_url`, `site.icon_url`, `theme.parent`, `pages[].url` and `pages[].modified_gmt` can be `null`.
+- `site.logo_url`, `site.icon_url`, `theme.parent`, `pages[].url` and `pages[].modified_gmt` can be `null`. Titles, names and labels are plain text (tags removed, entities decoded), so escape them on output.
 - `plugins[].slug` is the plugin's folder, or the file name without `.php` for a single-file plugin. `active` is true when the plugin is active on the site or across the network. `mu_plugins` has no `active`: must-use plugins always run.
 - `post_types` lists public types except attachments. `published` is the count with status "publish".
-- `media.count` is every item in the media library. `media.bytes` adds up the original files only, not the image sizes WordPress generates. `files_measured` is how many items a size was found for; `bytes_complete` is `false` when a very large library was cut off after 8 seconds, in which case `bytes` is a lower bound.
+- `media.count` is every item in the media library. `media.bytes` adds up each item's main file (for a very large image, the scaled copy WordPress serves as full size), not the smaller image sizes WordPress generates. `files_measured` is how many items a size was found for; `bytes_complete` is `false` when a very large library was cut off after 8 seconds, in which case `bytes` is a lower bound.
 - `flags.*` are true when a known plugin of that kind is active; `matched` names the plugin folders that set each flag (an empty object when none). `blog` is true from six published posts; `blog_posts` is the count.
-- `menus[].items[]`: `parent` is the `id` of another item in the same menu, 0 at the top level. `type` is `post_type`, `taxonomy`, `post_type_archive` or `custom`; `object` is what it points at (`page`, `category`, ...) and `object_id` that page's or term's ID (for a custom link, the item's own ID).
+- `menus[].items[]`: `parent` is the `id` of another item in the same menu, 0 at the top level. `type` is `post_type`, `taxonomy`, `post_type_archive` or `custom`; `object` is what it points at (`page`, `category`, ...) and `object_id` that page's or term's ID (for a custom link, the item's own ID). `url` can be `null`. Items whose page or term no longer exists are left out, as WordPress leaves them out of the menu.
 - `pages` are published pages only, in ascending `id` order. `parent` is a page `id`, 0 at the top level. `template` is the template file or `default`. `builder` is one of `elementor`, `wpbakery`, `divi`, `beaver-builder`, `blocks`, `classic`.
 - Later versions will add sections (SEO fields, redirects, forms) under new keys, so ignore keys you do not know. `inventory_version` goes up only when an existing field changes meaning.
 
-To try it without the real dashboard, define `CY_ULW_DASHBOARD_URL` in wp-config.php as `http://<host>:<port>/api/logins/intake`; the inventory then goes to `/api/sites/inventory` on that host. On a staging or local copy also define `CY_ULW_DASHBOARD_REPORTING` as `true`, or nothing is sent.
+To try it without the real dashboard, define `CY_ULW_DASHBOARD_URL` in wp-config.php as `http://<host>:<port>/api/logins/intake`; the inventory then goes to `/api/sites/inventory` on that host. The constant must end in `/api/logins/intake`, or no inventory is sent. On a staging or local copy also define `CY_ULW_DASHBOARD_REPORTING` as `true`, or nothing is sent.
