@@ -4,7 +4,7 @@
     "download_url" : "https://github.com/Control-Yours/User-Login-Watcher-Plugin/releases/download/v1.4.0/cy-user-login-watcher-1.4.0.zip",
     "homepage" : "https://github.com/Control-Yours/User-Login-Watcher-Plugin",
     "last_updated" : "2026-10-27",
-    "name" : "CY User Login Watcher",
+    "name" : "Control Yours Connector",
     "requires" : "6.0",
     "requires_php" : "7.4",
     "sections" : {

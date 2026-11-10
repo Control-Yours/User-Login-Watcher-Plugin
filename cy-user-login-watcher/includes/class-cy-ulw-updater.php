@@ -289,7 +289,7 @@ final class CY_ULW_Updater {
 		}
 
 		return array(
-			'name'            => isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : 'CY User Login Watcher',
+			'name'            => isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : 'Control Yours Connector',
 			'version'         => $version,
 			'download_url'    => esc_url_raw( $download ),
 			'homepage'        => isset( $data['homepage'] ) ? esc_url_raw( $data['homepage'] ) : 'https://github.com/' . CY_ULW_GITHUB_REPO,

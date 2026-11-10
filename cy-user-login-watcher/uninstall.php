@@ -1,9 +1,9 @@
 <?php
 /**
- * Uninstall CY User Login Watcher.
+ * Uninstall Control Yours Connector (folder and file names keep the old cy-user-login-watcher name).
  *
- * Removes all tracked timestamps, the options and the daily reporting cron
- * event. Runs only when the plugin is deleted from the Plugins screen (not on
+ * Removes all tracked timestamps, the options and both cron events (the daily
+ * report and a pending site inventory). Runs only when the plugin is deleted from the Plugins screen (not on
  * deactivation).
  *
  * @package CY_User_Login_Watcher
@@ -19,14 +19,18 @@ if ( is_multisite() ) {
 	foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $cy_ulw_site_id ) {
 		switch_to_blog( $cy_ulw_site_id );
 		wp_clear_scheduled_hook( 'cy_ulw_daily_report' );
+		wp_clear_scheduled_hook( 'cy_ulw_inventory_run' );
 		restore_current_blog();
 		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_installed' );
 		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_settings' );
 		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_reporter' );
+		delete_blog_option( $cy_ulw_site_id, 'cy_ulw_inventory' );
 	}
 } else {
 	wp_clear_scheduled_hook( 'cy_ulw_daily_report' );
+	wp_clear_scheduled_hook( 'cy_ulw_inventory_run' );
 	delete_option( 'cy_ulw_installed' );
 	delete_option( 'cy_ulw_settings' );
 	delete_option( 'cy_ulw_reporter' );
+	delete_option( 'cy_ulw_inventory' );
 }

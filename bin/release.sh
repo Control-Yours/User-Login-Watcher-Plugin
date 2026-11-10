@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Cut a release of CY User Login Watcher.
+# Cut a release of Control Yours Connector (folder and slug stay cy-user-login-watcher).
 #
 #   bash bin/release.sh <version>            bump, build zip, regenerate update.json (no git)
 #   bash bin/release.sh <version> --publish  ...then commit, tag, push, create the GitHub
@@ -159,7 +159,7 @@ if (-f $manifest_path) {
 }
 
 my $out = {
-  name            => $existing->{name} || 'CY User Login Watcher',
+  name            => $existing->{name} || 'Control Yours Connector',
   slug            => 'cy-user-login-watcher',
   version         => $version,
   requires        => $header{'Requires at least'} || '',

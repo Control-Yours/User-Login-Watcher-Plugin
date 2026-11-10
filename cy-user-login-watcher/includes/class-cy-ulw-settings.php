@@ -1,6 +1,6 @@
 <?php
 /**
- * Settings screen: Settings > Login Watcher. Loaded only on non-ajax wp-admin
+ * Settings screen: Settings > CY Connector. Loaded only on non-ajax wp-admin
  * requests. Reading settings elsewhere goes through cy_ulw_setting() in the
  * main plugin file.
  *
@@ -20,6 +20,11 @@ final class CY_ULW_Settings {
 	const PAGE = 'cy-user-login-watcher';
 
 	/**
+	 * Nonce action and submit button name of the "Send site inventory now" form.
+	 */
+	const INVENTORY_ACTION = 'cy_ulw_send_inventory';
+
+	/**
 	 * Register hooks.
 	 */
 	public static function init() {
@@ -29,16 +34,43 @@ final class CY_ULW_Settings {
 	}
 
 	/**
-	 * Add Settings > Login Watcher.
+	 * Add Settings > CY Connector.
 	 */
 	public static function add_page() {
-		add_options_page(
-			__( 'Login Watcher', 'cy-user-login-watcher' ),
-			__( 'Login Watcher', 'cy-user-login-watcher' ),
+		$hook = add_options_page(
+			__( 'Control Yours Connector', 'cy-user-login-watcher' ),
+			__( 'CY Connector', 'cy-user-login-watcher' ),
 			'manage_options',
 			self::PAGE,
 			array( __CLASS__, 'render_page' )
 		);
+
+		if ( $hook ) {
+			add_action( 'load-' . $hook, array( __CLASS__, 'handle_inventory_request' ) );
+		}
+	}
+
+	/**
+	 * The "Send site inventory now" button. Runs when the settings screen
+	 * loads, before any output. Administrators only, with a nonce. It only
+	 * queues the one-off cron event; the inventory itself is built and sent
+	 * in cron, never in this request.
+	 */
+	public static function handle_inventory_request() {
+		if ( ! isset( $_POST[ self::INVENTORY_ACTION ] ) ) {
+			return;
+		}
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Sorry, you are not allowed to send the site inventory.', 'cy-user-login-watcher' ), 403 );
+		}
+		check_admin_referer( self::INVENTORY_ACTION );
+
+		cy_ulw_load_inventory();
+		CY_ULW_Inventory::request( 'button' );
+
+		// Redirect so a reload does not post the form again.
+		wp_safe_redirect( admin_url( 'options-general.php?page=' . self::PAGE . '#cy-ulw-inventory' ) );
+		exit;
 	}
 
 	/**
@@ -153,7 +185,7 @@ final class CY_ULW_Settings {
 		$editor_filtered = ! $editor_constant && CY_ULW_File_Editor::is_disabled() !== $editor_saved;
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Login Watcher', 'cy-user-login-watcher' ); ?></h1>
+			<h1><?php esc_html_e( 'Control Yours Connector', 'cy-user-login-watcher' ); ?></h1>
 			<form method="post" action="options.php">
 				<?php settings_fields( self::PAGE ); ?>
 				<table class="form-table" role="presentation">
@@ -278,6 +310,34 @@ final class CY_ULW_Settings {
 				</table>
 				<?php submit_button(); ?>
 			</form>
+
+			<?php
+			cy_ulw_load_inventory();
+			$inventory_on = CY_ULW_Reporter::is_enabled();
+			?>
+			<h2 id="cy-ulw-inventory"><?php esc_html_e( 'Site inventory', 'cy-user-login-watcher' ); ?></h2>
+			<table class="form-table" role="presentation">
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Inventory', 'cy-user-login-watcher' ); ?></th>
+					<td>
+						<form method="post" action="<?php echo esc_url( admin_url( 'options-general.php?page=' . self::PAGE ) ); ?>">
+							<?php wp_nonce_field( self::INVENTORY_ACTION ); ?>
+							<?php submit_button( __( 'Send site inventory now', 'cy-user-login-watcher' ), 'secondary', self::INVENTORY_ACTION, false, $inventory_on ? array() : array( 'disabled' => 'disabled' ) ); ?>
+						</form>
+						<?php if ( $inventory_on ) : ?>
+							<p class="description"><?php esc_html_e( 'Sends a one-time list of this site\'s structure to the Admin Dashboard, to plan its move to SiteForge: theme, plugins, published pages and the builder each was made with, menus, content types and a media total. No users, form entries, orders, customers, settings or page content. It runs in the background within a few minutes; reload this screen to see the result. Nothing is sent unless this button is pressed or the dashboard asks for an inventory.', 'cy-user-login-watcher' ); ?></p>
+						<?php else : ?>
+							<p class="description"><?php esc_html_e( 'Not available while dashboard reporting is switched off for this site (see above).', 'cy-user-login-watcher' ); ?></p>
+						<?php endif; ?>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Last result', 'cy-user-login-watcher' ); ?></th>
+					<td>
+						<p><?php echo esc_html( CY_ULW_Inventory::status_text() ); ?></p>
+					</td>
+				</tr>
+			</table>
 		</div>
 		<?php
 	}
