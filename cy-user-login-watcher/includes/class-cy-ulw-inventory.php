@@ -66,6 +66,33 @@ final class CY_ULW_Inventory {
 	const PAGE_BATCH = 200;
 
 	/**
+	 * Page meta read for each batch of pages: the template, and the keys that
+	 * tell which builder a page was made with. Plain names only; they go into
+	 * the query as they are.
+	 */
+	const PAGE_META_KEYS = array(
+		'_wp_page_template',
+		'_elementor_edit_mode',       // Elementor: "builder".
+		'_et_pb_use_builder',         // Divi: "on".
+		'_fl_builder_enabled',        // Beaver Builder.
+		'fusion_builder_status',      // Avada: "active".
+		'ct_builder_json',            // Oxygen 4.
+		'_ct_builder_json',           // The same, on a site where Oxygen hides its meta keys.
+		'ct_builder_shortcodes',      // Oxygen before 4.
+		'_ct_builder_shortcodes',
+		'tcb_editor_enabled',         // Thrive Architect.
+		'panels_data',                // SiteOrigin Page Builder.
+		'page-option-item-xml',       // GoodLayers themes with a built-in builder.
+		'gdlr-core-page-builder',     // GoodLayers Core.
+	);
+
+	/**
+	 * Characters read from the start of each of those values (the template is
+	 * read whole).
+	 */
+	const META_PREFIX = 191;
+
+	/**
 	 * Attachments read per query when adding up media sizes.
 	 */
 	const MEDIA_BATCH = 500;
@@ -1089,11 +1116,12 @@ final class CY_ULW_Inventory {
 	 * The next batch of published pages after a given ID.
 	 *
 	 * Content never leaves the database: the query only reports whether it
-	 * holds WPBakery or block markup. Only the four small meta values needed
-	 * are read, not the page's whole meta (an Elementor page keeps megabytes
-	 * of layout data there). The address comes from get_permalink(), given a
-	 * post object built from the row (see bare_post()) so that WordPress does
-	 * not load and cache every page, content included, to work it out. Parent
+	 * holds a builder's or the block editor's markup. Only the start of the
+	 * few meta values needed is read, not the page's whole meta (a builder
+	 * page keeps megabytes of layout data there). The address comes from
+	 * get_permalink(), given a post object built from the row (see
+	 * bare_post()) so that WordPress does not load and cache every page,
+	 * content included, to work it out. Parent
 	 * pages are still loaded by WordPress, once each; on a site where that
 	 * adds up, the memory check in should_pause() ends the run early and the
 	 * next one continues.
@@ -1108,13 +1136,19 @@ final class CY_ULW_Inventory {
 			$wpdb->prepare(
 				"SELECT ID, post_title, post_name, post_parent, menu_order, post_modified_gmt,
 					( post_content LIKE %s ) AS has_wpbakery,
-					( post_content LIKE %s ) AS has_blocks
+					( post_content LIKE %s ) AS has_blocks,
+					( post_content LIKE %s ) AS has_avada,
+					( post_content LIKE %s ) AS has_kingcomposer,
+					( post_content LIKE %s ) AS has_bold
 				FROM {$wpdb->posts}
 				WHERE post_type = 'page' AND post_status = 'publish' AND ID > %d
 				ORDER BY ID ASC
 				LIMIT %d",
 				'%' . $wpdb->esc_like( '[vc_row' ) . '%',
 				'%' . $wpdb->esc_like( '<!-- wp:' ) . '%',
+				'%' . $wpdb->esc_like( '[fusion_builder_container' ) . '%',
+				'%' . $wpdb->esc_like( '[kc_row' ) . '%',
+				'%' . $wpdb->esc_like( '[bt_bb_section' ) . '%',
 				(int) $after_id,
 				self::PAGE_BATCH
 			)
@@ -1129,12 +1163,18 @@ final class CY_ULW_Inventory {
 			$ids[] = (int) $row->ID;
 		}
 
+		// Only the start of each builder value is read: some of these keys hold
+		// a whole page layout, and its first characters are enough to tell an
+		// empty layout from a real one. Where a key has more than one row, the
+		// oldest counts, as it does for get_post_meta().
 		$meta      = array();
 		$meta_rows = $wpdb->get_results(
-			"SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('_wp_page_template', '_elementor_edit_mode', '_et_pb_use_builder', '_fl_builder_enabled')" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- IDs are integers from the query above.
+			"SELECT post_id, meta_key, IF( meta_key = '_wp_page_template', meta_value, LEFT( meta_value, " . self::META_PREFIX . " ) ) AS meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('" . implode( "', '", self::PAGE_META_KEYS ) . "') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- IDs are integers from the query above; the keys and the length are constants of this class.
 		);
 		foreach ( (array) $meta_rows as $row ) {
-			$meta[ (int) $row->post_id ][ (string) $row->meta_key ] = (string) $row->meta_value;
+			if ( ! isset( $meta[ (int) $row->post_id ][ (string) $row->meta_key ] ) ) {
+				$meta[ (int) $row->post_id ][ (string) $row->meta_key ] = (string) $row->meta_value;
+			}
 		}
 
 		$front = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_on_front' ) : 0;
@@ -1160,7 +1200,16 @@ final class CY_ULW_Inventory {
 				'modified_gmt'  => '' !== $modified && 0 !== strpos( $modified, '0000' ) ? str_replace( ' ', 'T', $modified ) . 'Z' : null,
 				'is_front_page' => $front > 0 && $id === $front,
 				'is_posts_page' => $blog > 0 && $id === $blog,
-				'builder'       => self::builder( $page_meta, (bool) $row->has_wpbakery, (bool) $row->has_blocks ),
+				'builder'       => self::builder(
+					$page_meta,
+					array(
+						'wpbakery'     => (bool) $row->has_wpbakery,
+						'blocks'       => (bool) $row->has_blocks,
+						'avada'        => (bool) $row->has_avada,
+						'kingcomposer' => (bool) $row->has_kingcomposer,
+						'bold-builder' => (bool) $row->has_bold,
+					)
+				),
 			);
 		}
 
@@ -1199,16 +1248,25 @@ final class CY_ULW_Inventory {
 	/**
 	 * Which builder a page was made with.
 	 *
-	 * @param array $meta         The page's builder meta values.
-	 * @param bool  $has_wpbakery Whether the content holds a [vc_row shortcode.
-	 * @param bool  $has_blocks   Whether the content holds block markup.
-	 * @return string elementor, wpbakery, divi, beaver-builder, blocks or classic.
+	 * A builder that keeps its layout outside the page content (GoodLayers,
+	 * SiteOrigin, Oxygen, Thrive) is recognised by its own meta value, and
+	 * only when that value holds a layout: these builders save an empty one on
+	 * pages written in the normal editor. The page-builder plugins come before
+	 * the theme builders, and the editors last, so a page that carries traces
+	 * of more than one is named after the one most likely to be drawing it.
+	 *
+	 * @param array $meta    The start of each of the page's builder meta values.
+	 * @param array $content Which builders' markup the page content holds:
+	 *                       wpbakery, blocks, avada, kingcomposer, bold-builder.
+	 * @return string elementor, wpbakery, divi, beaver-builder, avada, oxygen,
+	 *                thrive, siteorigin, kingcomposer, bold-builder,
+	 *                goodlayers, blocks or classic.
 	 */
-	private static function builder( array $meta, $has_wpbakery, $has_blocks ) {
+	private static function builder( array $meta, array $content ) {
 		if ( isset( $meta['_elementor_edit_mode'] ) && 'builder' === $meta['_elementor_edit_mode'] ) {
 			return 'elementor';
 		}
-		if ( $has_wpbakery ) {
+		if ( ! empty( $content['wpbakery'] ) ) {
 			return 'wpbakery';
 		}
 		if ( isset( $meta['_et_pb_use_builder'] ) && 'on' === $meta['_et_pb_use_builder'] ) {
@@ -1217,6 +1275,50 @@ final class CY_ULW_Inventory {
 		if ( ! empty( $meta['_fl_builder_enabled'] ) ) {
 			return 'beaver-builder';
 		}
-		return $has_blocks ? 'blocks' : 'classic';
+		if ( ! empty( $content['avada'] ) || ( isset( $meta['fusion_builder_status'] ) && 'active' === $meta['fusion_builder_status'] ) ) {
+			return 'avada';
+		}
+		// Oxygen: a root element with children, as its own
+		// oxygen_json_has_elements() tests it, or shortcodes from before 4.0.
+		foreach ( array( 'ct_builder_json', '_ct_builder_json' ) as $key ) {
+			if ( isset( $meta[ $key ] ) && false !== strpos( $meta[ $key ], '"children":[{' ) ) {
+				return 'oxygen';
+			}
+		}
+		if ( self::has_layout( $meta, 'ct_builder_shortcodes' ) || self::has_layout( $meta, '_ct_builder_shortcodes' ) ) {
+			return 'oxygen';
+		}
+		if ( ! empty( $meta['tcb_editor_enabled'] ) ) {
+			return 'thrive';
+		}
+		if ( self::has_layout( $meta, 'panels_data', array( 'a:0:{}' ) ) && false === strpos( $meta['panels_data'], '"widgets";a:0:{}' ) ) {
+			return 'siteorigin';
+		}
+		if ( ! empty( $content['kingcomposer'] ) ) {
+			return 'kingcomposer';
+		}
+		if ( ! empty( $content['bold-builder'] ) ) {
+			return 'bold-builder';
+		}
+		if ( self::has_layout( $meta, 'page-option-item-xml', array( '<item-tag></item-tag>' ) ) || self::has_layout( $meta, 'gdlr-core-page-builder', array( 'a:0:{}' ) ) ) {
+			return 'goodlayers';
+		}
+		return ! empty( $content['blocks'] ) ? 'blocks' : 'classic';
+	}
+
+	/**
+	 * Whether a builder's layout meta value holds anything.
+	 *
+	 * @param array    $meta  The start of each of the page's builder meta values.
+	 * @param string   $key   Meta key.
+	 * @param string[] $empty Values the builder saves for a page without a layout.
+	 * @return bool
+	 */
+	private static function has_layout( array $meta, $key, array $empty = array() ) {
+		if ( ! isset( $meta[ $key ] ) ) {
+			return false;
+		}
+		$value = trim( $meta[ $key ] );
+		return '' !== $value && ! in_array( $value, $empty, true );
 	}
 }

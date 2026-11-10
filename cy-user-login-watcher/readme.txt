@@ -62,7 +62,7 @@ Sent (as `inventory_version` 1):
 * Theme: the active theme and its parent, with versions.
 * Plugins: every installed plugin's folder, name and version and whether it is active, plus the must-use plugins.
 * Content types: each public post type with its number of published items and whether it is built in.
-* Pages: for each published page its ID, title, slug, parent, menu order, template, URL, last modified date, whether it is the front page or the posts page, and the builder it was made with (Elementor, WPBakery, Divi, Beaver Builder, blocks or classic).
+* Pages: for each published page its ID, title, slug, parent, menu order, template, URL, last modified date, whether it is the front page or the posts page, and the builder it was made with (Elementor, WPBakery, Divi, Beaver Builder, Avada, Oxygen, Thrive Architect, SiteOrigin, KingComposer, Bold Builder, a GoodLayers theme builder, blocks or classic).
 * Menus: each menu, the theme locations it is assigned to, and its items (label, target, parent).
 * Media: the number of items and the total size of their main files (not the smaller image sizes WordPress generates). No file is uploaded or listed.
 * Flags worked out from the active plugins: WooCommerce, a learning plugin, a forum, a multilingual plugin, form payments, an events plugin, and whether the site has a blog (six or more published posts).
@@ -105,6 +105,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.5.1 =
+* Site inventory: pages made with seven more builders are now named instead of being listed as classic editor pages. New `builder` values: `avada` (Avada / Fusion Builder), `oxygen`, `thrive` (Thrive Architect), `siteorigin`, `kingcomposer`, `bold-builder` and `goodlayers` (GoodLayers themes with a built-in builder, and GoodLayers Core). A builder that keeps its layout outside the page content is only named when that layout is not empty, so a page written in the normal editor on such a site is still classic. Found on the first real inventory, where a home page built with a theme's own builder came through as classic. Nothing else changes; `inventory_version` stays 1.
 
 = 1.5.0 =
 * The plugin is now called Control Yours Connector, and its settings screen is Settings > CY Connector (it was Settings > Login Watcher). Only the name shown changes: the folder, the main file, the settings, the dashboard key and the update channel are the same, so an updated site stays active and keeps everything it had.
