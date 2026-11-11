@@ -58,12 +58,12 @@ Nothing is sent unless an inventory was asked for. There are two ways to ask: th
 
 Sent (as `inventory_version` 1):
 
-* Site: name, tagline, home URL, language, permalink structure, logo and site icon URLs, WordPress and PHP versions, whether it is a multisite.
+* Site: name, tagline, home URL, language, permalink structure, logo and site icon URLs, WordPress and PHP versions, whether it is a multisite, and on a WPML site its languages.
 * Theme: the active theme and its parent, with versions.
 * Plugins: every installed plugin's folder, name and version and whether it is active, plus the must-use plugins.
 * Content types: each public post type with its number of published items and whether it is built in.
-* Pages: for each published page its ID, title, slug, parent, menu order, template, URL, last modified date, whether it is the front page or the posts page, and the builder it was made with (Elementor, WPBakery, Divi, Beaver Builder, Avada, Oxygen, Thrive Architect, SiteOrigin, KingComposer, Bold Builder, a GoodLayers theme builder, blocks or classic).
-* Menus: each menu, the theme locations it is assigned to, and its items (label, target, parent).
+* Pages: for each published page its ID, title, slug, parent, menu order, template, URL, last modified date, whether it is the front page or the posts page, on a WPML site its language, and the builder it was made with (Elementor, WPBakery, Divi, Beaver Builder, Avada, Oxygen, Thrive Architect, SiteOrigin, KingComposer, Bold Builder, a GoodLayers theme builder, blocks or classic).
+* Menus: each menu, the theme locations it is assigned to, its items (label, target, parent), and on a WPML site its language.
 * Media: the number of items and the total size of their main files (not the smaller image sizes WordPress generates). No file is uploaded or listed.
 * Flags worked out from the active plugins: WooCommerce, a learning plugin, a forum, a multilingual plugin, form payments, an events plugin, and whether the site has a blog (six or more published posts).
 
@@ -105,6 +105,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.5.2 =
+* Site inventory on WPML sites: translated menus and pages are now reported as themselves. Before, WPML answered the inventory's questions in the default language, so a Spanish menu arrived as a second copy of the English one and a Spanish page arrived with the English page's address (or `?page_id=` when it had no English version). Each page and menu is now worked out in its own language: the address is the one visitors get (`/es/acerca-de/`), each language's front page and posts page are marked, and a translated menu carries the theme locations of the menu it translates. New fields: `site.languages` (default and active language codes) and `language` on every page and menu, `null` on a site with one language. Found on the first inventory of a bilingual site. Nothing changes on sites without WPML; `inventory_version` stays 1.
 
 = 1.5.1 =
 * Site inventory: pages made with seven more builders are now named instead of being listed as classic editor pages. New `builder` values: `avada` (Avada / Fusion Builder), `oxygen`, `thrive` (Thrive Architect), `siteorigin`, `kingcomposer`, `bold-builder` and `goodlayers` (GoodLayers themes with a built-in builder, and GoodLayers Core). A builder that keeps its layout outside the page content is only named when that layout is not empty, so a page written in the normal editor on such a site is still classic. Found on the first real inventory, where a home page built with a theme's own builder came through as classic. Nothing else changes; `inventory_version` stays 1.
