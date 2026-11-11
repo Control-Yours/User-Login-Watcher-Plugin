@@ -745,6 +745,7 @@ final class CY_ULW_Inventory {
 			'wp_version'          => (string) get_bloginfo( 'version' ),
 			'php_version'         => PHP_VERSION,
 			'multisite'           => is_multisite(),
+			'languages'           => self::site_languages(),
 		);
 	}
 
@@ -992,24 +993,85 @@ final class CY_ULW_Inventory {
 	 * @return array[]
 	 */
 	private static function menus() {
-		$locations = array();
+		global $wpdb;
+
+		if ( ! self::multilingual() ) {
+			$locations = array();
+			foreach ( (array) get_nav_menu_locations() as $location => $menu_id ) {
+				$locations[ (int) $menu_id ][] = (string) $location;
+			}
+
+			$menus = array();
+
+			foreach ( (array) wp_get_nav_menus() as $menu ) {
+				$menus[] = array(
+					'id'        => (int) $menu->term_id,
+					'name'      => self::plain( $menu->name ),
+					'slug'      => (string) $menu->slug,
+					'locations' => isset( $locations[ (int) $menu->term_id ] ) ? $locations[ (int) $menu->term_id ] : array(),
+					'items'     => self::menu_items( (int) $menu->term_id ),
+					'language'  => null,
+				);
+			}
+
+			return $menus;
+		}
+
+		// With WPML, wp_get_nav_menus() hands back every menu as its
+		// translation in the current language, so a Spanish menu would arrive
+		// as a second copy of the English one. The menus are read straight
+		// from the database, and each one's items are worked out in the
+		// menu's own language.
+		$terms = $wpdb->get_results(
+			"SELECT t.term_id, t.name, t.slug, tt.term_taxonomy_id FROM {$wpdb->terms} t INNER JOIN {$wpdb->term_taxonomy} tt ON tt.term_id = t.term_id WHERE tt.taxonomy = 'nav_menu' ORDER BY t.name ASC, t.term_id ASC"
+		);
+
+		$known = self::translations_of( 'tax_nav_menu', wp_list_pluck( (array) $terms, 'term_taxonomy_id' ) );
+
+		// A theme location is saved against one menu; WPML shows that menu's
+		// translation there in the other languages. So a location belongs to
+		// every menu in the same translation group.
+		$assigned = array();
 		foreach ( (array) get_nav_menu_locations() as $location => $menu_id ) {
-			$locations[ (int) $menu_id ][] = (string) $location;
+			$assigned[ (int) $menu_id ][] = (string) $location;
+		}
+		$shared = array();
+		foreach ( (array) $terms as $term ) {
+			$id = (int) $term->term_id;
+			if ( isset( $assigned[ $id ], $known[ (int) $term->term_taxonomy_id ] ) ) {
+				$group            = $known[ (int) $term->term_taxonomy_id ]['group'];
+				$shared[ $group ] = array_merge( isset( $shared[ $group ] ) ? $shared[ $group ] : array(), $assigned[ $id ] );
+			}
 		}
 
-		$menus = array();
-
-		foreach ( (array) wp_get_nav_menus() as $menu ) {
-			$menus[] = array(
-				'id'        => (int) $menu->term_id,
-				'name'      => self::plain( $menu->name ),
-				'slug'      => (string) $menu->slug,
-				'locations' => isset( $locations[ (int) $menu->term_id ] ) ? $locations[ (int) $menu->term_id ] : array(),
-				'items'     => self::menu_items( (int) $menu->term_id ),
-			);
+		$languages = array();
+		foreach ( (array) $terms as $index => $term ) {
+			$languages[ $index ] = isset( $known[ (int) $term->term_taxonomy_id ] ) ? $known[ (int) $term->term_taxonomy_id ]['language'] : null;
 		}
 
-		return $menus;
+		return self::each_in_language(
+			(array) $terms,
+			$languages,
+			function ( $term, $language ) use ( $known, $shared, $assigned ) {
+				$id      = (int) $term->term_id;
+				$details = isset( $known[ (int) $term->term_taxonomy_id ] ) ? $known[ (int) $term->term_taxonomy_id ] : null;
+
+				if ( $details && isset( $shared[ $details['group'] ] ) ) {
+					$locations = array_values( array_unique( $shared[ $details['group'] ] ) );
+				} else {
+					$locations = isset( $assigned[ $id ] ) ? $assigned[ $id ] : array();
+				}
+
+				return array(
+					'id'        => $id,
+					'name'      => self::plain( $term->name ),
+					'slug'      => (string) $term->slug,
+					'locations' => $locations,
+					'items'     => self::menu_items( $id ),
+					'language'  => $language,
+				);
+			}
+		);
 	}
 
 	/**
@@ -1177,43 +1239,218 @@ final class CY_ULW_Inventory {
 			}
 		}
 
-		$front = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_on_front' ) : 0;
-		$blog  = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
+		// On a WPML site each page is worked out in its own language: asked in
+		// another one, WPML answers with the translation's address, and the
+		// front page and posts page are different pages in each language.
+		$known     = self::translations_of( 'post_page', $ids );
+		$languages = array();
+		foreach ( $rows as $index => $row ) {
+			$languages[ $index ] = isset( $known[ (int) $row->ID ] ) ? $known[ (int) $row->ID ]['language'] : null;
+		}
+		$special = array();
 
-		$pages = array();
+		return self::each_in_language(
+			$rows,
+			$languages,
+			function ( $row, $language, $answering ) use ( $meta, &$special ) {
+				$id        = (int) $row->ID;
+				$page_meta = isset( $meta[ $id ] ) ? $meta[ $id ] : array();
+				$template  = isset( $page_meta['_wp_page_template'] ) && '' !== $page_meta['_wp_page_template'] ? $page_meta['_wp_page_template'] : 'default';
+				$modified  = (string) $row->post_modified_gmt;
 
-		foreach ( $rows as $row ) {
-			$id        = (int) $row->ID;
-			$page_meta = isset( $meta[ $id ] ) ? $meta[ $id ] : array();
-			$template  = isset( $page_meta['_wp_page_template'] ) && '' !== $page_meta['_wp_page_template'] ? $page_meta['_wp_page_template'] : 'default';
-			$modified  = (string) $row->post_modified_gmt;
-			$url       = get_permalink( self::bare_post( $row ) );
+				if ( ! isset( $special[ (string) $answering ] ) ) {
+					$static                         = 'page' === get_option( 'show_on_front' );
+					$special[ (string) $answering ] = array(
+						$static ? (int) get_option( 'page_on_front' ) : 0,
+						$static ? (int) get_option( 'page_for_posts' ) : 0,
+					);
+				}
+				list( $front, $blog ) = $special[ (string) $answering ];
 
-			$pages[] = array(
-				'id'            => $id,
-				'title'         => self::plain( $row->post_title ),
-				'slug'          => (string) $row->post_name,
-				'parent'        => (int) $row->post_parent,
-				'menu_order'    => (int) $row->menu_order,
-				'template'      => $template,
-				'url'           => $url ? (string) $url : null,
-				'modified_gmt'  => '' !== $modified && 0 !== strpos( $modified, '0000' ) ? str_replace( ' ', 'T', $modified ) . 'Z' : null,
-				'is_front_page' => $front > 0 && $id === $front,
-				'is_posts_page' => $blog > 0 && $id === $blog,
-				'builder'       => self::builder(
-					$page_meta,
-					array(
-						'wpbakery'     => (bool) $row->has_wpbakery,
-						'blocks'       => (bool) $row->has_blocks,
-						'avada'        => (bool) $row->has_avada,
-						'kingcomposer' => (bool) $row->has_kingcomposer,
-						'bold-builder' => (bool) $row->has_bold,
-					)
-				),
-			);
+				$url = get_permalink( self::bare_post( $row ) );
+
+				return array(
+					'id'            => $id,
+					'title'         => self::plain( $row->post_title ),
+					'slug'          => (string) $row->post_name,
+					'parent'        => (int) $row->post_parent,
+					'menu_order'    => (int) $row->menu_order,
+					'template'      => $template,
+					'url'           => $url ? (string) $url : null,
+					'modified_gmt'  => '' !== $modified && 0 !== strpos( $modified, '0000' ) ? str_replace( ' ', 'T', $modified ) . 'Z' : null,
+					'is_front_page' => $front > 0 && $id === $front,
+					'is_posts_page' => $blog > 0 && $id === $blog,
+					'builder'       => self::builder(
+						$page_meta,
+						array(
+							'wpbakery'     => (bool) $row->has_wpbakery,
+							'blocks'       => (bool) $row->has_blocks,
+							'avada'        => (bool) $row->has_avada,
+							'kingcomposer' => (bool) $row->has_kingcomposer,
+							'bold-builder' => (bool) $row->has_bold,
+						)
+					),
+					'language'      => $language, // WPML language code; null on a site with one language.
+				);
+			}
+		);
+	}
+
+	/**
+	 * Build one result per item, each in its own WPML language.
+	 *
+	 * The items are taken one language at a time, so WPML is switched once
+	 * per language and not once per item; the results come back in the order
+	 * the items were given. The language in use before is put back whatever
+	 * happens. Without WPML this is a plain loop.
+	 *
+	 * @param array    $items     Items, any keys.
+	 * @param array    $languages Language code or null for each item, by the same keys.
+	 * @param callable $build     Called with the item, its language (or null) and the
+	 *                            language WPML is answering in (or null); returns the result.
+	 * @return array[]
+	 */
+	private static function each_in_language( array $items, array $languages, $build ) {
+		$original = self::language();
+		$current  = $original;
+
+		$groups = array();
+		foreach ( $items as $key => $item ) {
+			$groups[ isset( $languages[ $key ] ) ? (string) $languages[ $key ] : '' ][] = $key;
 		}
 
-		return $pages;
+		$position = array_flip( array_keys( $items ) );
+		$results  = array();
+
+		try {
+			foreach ( $groups as $code => $keys ) {
+				$language = '' !== (string) $code ? (string) $code : null;
+				$current  = self::switch_language( null !== $language ? $language : $original, $current );
+				foreach ( $keys as $key ) {
+					$results[ $position[ $key ] ] = call_user_func( $build, $items[ $key ], $language, $current );
+				}
+			}
+		} finally {
+			self::switch_language( $original, $current );
+		}
+
+		ksort( $results );
+		return array_values( $results );
+	}
+
+	/**
+	 * The languages a WPML site is published in, default first; null on a
+	 * site with one language.
+	 *
+	 * @return array|null { default: string, active: string[] }
+	 */
+	private static function site_languages() {
+		if ( ! self::multilingual() ) {
+			return null;
+		}
+
+		$default = apply_filters( 'wpml_default_language', null );
+		$active  = apply_filters( 'wpml_active_languages', null, array( 'skip_missing' => 0 ) );
+		$codes   = is_array( $active ) ? array_map( 'strval', array_keys( $active ) ) : array();
+		$default = is_string( $default ) ? $default : '';
+
+		// Default first, the rest by code.
+		$codes = array_values( array_diff( $codes, array( $default ) ) );
+		sort( $codes );
+		if ( '' !== $default ) {
+			array_unshift( $codes, $default );
+		}
+
+		return array(
+			'default' => $default,
+			'active'  => $codes,
+		);
+	}
+
+	/**
+	 * Whether WPML is running and set up. With it, WordPress answers questions about a
+	 * page, menu or term in another language with that item's translation, so
+	 * the inventory asks each one in its own language.
+	 *
+	 * @return bool
+	 */
+	private static function multilingual() {
+		static $running = null;
+		if ( null === $running ) {
+			// Loaded, and set up: a WPML that never finished its setup has no default language.
+			$default = defined( 'ICL_SITEPRESS_VERSION' ) && has_action( 'wpml_switch_language' ) ? apply_filters( 'wpml_default_language', null ) : null;
+			$running = is_string( $default ) && '' !== $default;
+		}
+		return $running;
+	}
+
+	/**
+	 * The language WPML is answering in, or null without WPML.
+	 *
+	 * @return string|null
+	 */
+	private static function language() {
+		if ( ! self::multilingual() ) {
+			return null;
+		}
+		$code = apply_filters( 'wpml_current_language', null );
+		return is_string( $code ) && '' !== $code ? $code : null;
+	}
+
+	/**
+	 * Ask WPML to answer in another language. Does nothing without WPML, or
+	 * when that language is already the current one. A language WPML does not
+	 * have (pages left from one that was switched off) leaves it where it was.
+	 *
+	 * @param string|null $code    Language wanted.
+	 * @param string|null $current Language in use now.
+	 * @return string|null The language in use afterwards.
+	 */
+	private static function switch_language( $code, $current ) {
+		if ( null === $code || $code === $current || ! self::multilingual() ) {
+			return $current;
+		}
+		do_action( 'wpml_switch_language', $code );
+
+		// WPML ignores a language it no longer has; believe what it says it is using.
+		$now = self::language();
+		return null !== $now ? $now : $code;
+	}
+
+	/**
+	 * What WPML knows about each item, read from its own table in one query:
+	 * the item's language, and the translation group it shares with the same
+	 * item in the other languages.
+	 *
+	 * @param string $type WPML element type: post_page for pages, tax_nav_menu for menus.
+	 * @param int[]  $ids  Post IDs, or term taxonomy IDs for menus.
+	 * @return array[] { language: string, group: int } by ID; empty without WPML. Items WPML does not know are left out.
+	 */
+	private static function translations_of( $type, array $ids ) {
+		global $wpdb;
+
+		$ids = array_filter( array_map( 'intval', $ids ) );
+		if ( ! $ids || ! self::multilingual() ) {
+			return array();
+		}
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT element_id, language_code, trid FROM {$wpdb->prefix}icl_translations WHERE element_type = %s AND element_id IN (" . implode( ',', $ids ) . ')', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- WPML's table; the IDs are integers.
+				$type
+			)
+		);
+
+		$known = array();
+		foreach ( (array) $rows as $row ) {
+			if ( '' !== (string) $row->language_code ) {
+				$known[ (int) $row->element_id ] = array(
+					'language' => (string) $row->language_code,
+					'group'    => (int) $row->trid,
+				);
+			}
+		}
+		return $known;
 	}
 
 	/**
