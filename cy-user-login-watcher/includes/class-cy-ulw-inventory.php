@@ -783,10 +783,11 @@ final class CY_ULW_Inventory {
 
 	/**
 	 * Every installed plugin, the must-use plugins, and the folders of the active ones.
+	 * Also used by the daily snapshot (CY_ULW_Reporter::snapshot_plugins()).
 	 *
 	 * @return array { plugins: array[], mu_plugins: array[], active_slugs: string[] }
 	 */
-	private static function plugins() {
+	public static function plugins() {
 		if ( ! function_exists( 'get_plugins' ) || ! function_exists( 'get_mu_plugins' ) ) {
 			require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		}
