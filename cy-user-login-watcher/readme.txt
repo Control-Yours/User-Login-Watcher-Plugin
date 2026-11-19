@@ -50,7 +50,7 @@ Deleting the plugin from the Plugins screen removes all of the above. Deactivati
 
 == Sent to the dashboard ==
 
-Each report is a JSON `POST` to `https://admin.controlyours.com/api/logins/intake` with the site key in an `X-CY-Site-Key` header. It carries the site's home URL, name, WP Engine install name (when the `PWP_NAME` constant exists), plugin, WordPress and PHP versions, and for each user included: ID, username, display name, email, roles, last login and last active timestamps. Login and activity reports carry the one user; the daily snapshot carries every tracked user. Nothing else (no passwords, no content, no visitors) is sent.
+Each report is a JSON `POST` to `https://admin.controlyours.com/api/logins/intake` with the site key in an `X-CY-Site-Key` header. It carries the site's home URL, name, WP Engine install name (when the `PWP_NAME` constant exists), plugin, WordPress and PHP versions, and for each user included: ID, username, display name, email, roles, last login and last active timestamps. Login and activity reports carry the one user; the daily snapshot carries every tracked user and, from 1.6.0, every installed plugin's folder, version and whether it is active, so the dashboard can tell which WP Engine vulnerability notices the site has already patched. Nothing else (no passwords, no content, no visitors) is sent.
 
 == Site inventory ==
 
@@ -105,6 +105,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.6.0 =
+* The daily snapshot now includes the installed plugins: each plugin's folder, version and whether it is active, the same list the site inventory sends. The Admin Dashboard uses it to close Security rows (WP Engine vulnerability notices) as soon as the site runs the fixed version, without waiting for someone to ask for an inventory. Nothing else changes: no new option, cron event or setting. If the list can't be built the snapshot goes out without it, as before.
 
 = 1.5.2 =
 * Site inventory on WPML sites: translated menus and pages are now reported as themselves. Before, WPML answered the inventory's questions in the default language, so a Spanish menu arrived as a second copy of the English one and a Spanish page arrived with the English page's address (or `?page_id=` when it had no English version). Each page and menu is now worked out in its own language: the address is the one visitors get (`/es/acerca-de/`), each language's front page and posts page are marked, and a translated menu carries the theme locations of the menu it translates. New fields: `site.languages` (default and active language codes) and `language` on every page and menu, `null` on a site with one language. Found on the first inventory of a bilingual site. Nothing changes on sites without WPML; `inventory_version` stays 1.

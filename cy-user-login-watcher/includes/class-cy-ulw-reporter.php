@@ -452,7 +452,7 @@ final class CY_ULW_Reporter {
 
 		try {
 			$config   = self::config();
-			$response = self::post( 'snapshot', self::snapshot_users(), $config['site_key'], true );
+			$response = self::post( 'snapshot', self::snapshot_users(), $config['site_key'], true, array( 'plugins' => self::snapshot_plugins() ) );
 
 			$config['last_sent'] = time();
 
@@ -545,6 +545,33 @@ final class CY_ULW_Reporter {
 		} while ( count( $batch ) === self::SNAPSHOT_BATCH );
 
 		return $users;
+	}
+
+	/**
+	 * Every installed plugin with its folder slug and version, for the daily
+	 * snapshot. The dashboard compares the versions with WP Engine's
+	 * vulnerability notices and closes the ones this site has already patched.
+	 * Uses the inventory's own plugin list, so both report the same slugs. A
+	 * failure here leaves the list out (null) rather than losing the snapshot.
+	 *
+	 * @return array[]|null One { slug, version, active } entry per plugin, or null.
+	 */
+	private static function snapshot_plugins() {
+		try {
+			cy_ulw_load_inventory();
+			$list = CY_ULW_Inventory::plugins();
+			$out  = array();
+			foreach ( $list['plugins'] as $plugin ) {
+				$out[] = array(
+					'slug'    => $plugin['slug'],
+					'version' => $plugin['version'],
+					'active'  => $plugin['active'],
+				);
+			}
+			return $out;
+		} catch ( Throwable $e ) {
+			return null;
+		}
 	}
 
 	/* ---------------------------------------------------------------------
@@ -648,18 +675,30 @@ final class CY_ULW_Reporter {
 	 * @param array[] $users    User entries from user_entry().
 	 * @param string  $site_key This site's key, sent as the X-CY-Site-Key header.
 	 * @param bool    $blocking Wait for the response (snapshot) or fire and forget (events).
+	 * @param array   $extra    More top-level keys for the body (the snapshot's "plugins"); null values are left out.
 	 * @return array|WP_Error wp_remote_post() result. For non-blocking requests the
 	 *                        response code is always empty.
 	 */
-	private static function post( $type, array $users, $site_key, $blocking ) {
-		$body = wp_json_encode(
-			array(
-				'type'    => $type,
-				'sent_at' => time(),
-				'site'    => self::site_info(),
-				'users'   => array_values( $users ),
-			)
+	private static function post( $type, array $users, $site_key, $blocking, array $extra = array() ) {
+		$payload = array(
+			'type'    => $type,
+			'sent_at' => time(),
+			'site'    => self::site_info(),
+			'users'   => array_values( $users ),
 		);
+		$base = $payload;
+		// Extra top-level keys (the snapshot's plugin list); a null value, or a
+		// key the report already has, is left out.
+		foreach ( $extra as $key => $value ) {
+			if ( null !== $value && ! array_key_exists( $key, $payload ) ) {
+				$payload[ $key ] = $value;
+			}
+		}
+		$body = wp_json_encode( $payload );
+		// An extra that can't be encoded must not cost the report itself.
+		if ( false === $body && $payload !== $base ) {
+			$body = wp_json_encode( $base );
+		}
 
 		if ( false === $body ) {
 			return new WP_Error( 'cy_ulw_json', 'Could not encode the report as JSON.' );
