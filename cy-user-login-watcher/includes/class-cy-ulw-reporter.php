@@ -686,13 +686,19 @@ final class CY_ULW_Reporter {
 			'site'    => self::site_info(),
 			'users'   => array_values( $users ),
 		);
-		// Extra top-level keys (the snapshot's plugin list); a null value is left out.
+		$base = $payload;
+		// Extra top-level keys (the snapshot's plugin list); a null value, or a
+		// key the report already has, is left out.
 		foreach ( $extra as $key => $value ) {
-			if ( null !== $value ) {
+			if ( null !== $value && ! array_key_exists( $key, $payload ) ) {
 				$payload[ $key ] = $value;
 			}
 		}
 		$body = wp_json_encode( $payload );
+		// An extra that can't be encoded must not cost the report itself.
+		if ( false === $body && $payload !== $base ) {
+			$body = wp_json_encode( $base );
+		}
 
 		if ( false === $body ) {
 			return new WP_Error( 'cy_ulw_json', 'Could not encode the report as JSON.' );
