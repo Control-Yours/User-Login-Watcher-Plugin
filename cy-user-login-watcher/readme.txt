@@ -54,7 +54,7 @@ Each report is a JSON `POST` to `https://admin.controlyours.com/api/logins/intak
 
 == Site inventory ==
 
-Nothing is sent unless an inventory was asked for. There are two ways to ask: the dashboard includes `"requests": ["inventory"]` in its JSON answer to an accepted daily snapshot, or an administrator presses "Send site inventory now" under Settings > CY Connector. Either one only schedules the one-off `cy_ulw_inventory_run` cron event; the inventory is built and sent there. An empty answer, an answer that is not JSON, or a request this version does not know changes nothing.
+Nothing is sent unless an inventory was asked for. There are two ways to ask: the dashboard includes `"requests": ["inventory"]` in its JSON answer to an accepted daily snapshot, or an administrator presses "Send site inventory now" under Settings > CY Connector. Either one only schedules the one-off `cy_ulw_inventory_run` cron event; the inventory is built and sent there. An empty answer, an answer that is not JSON, or a request this version does not know changes nothing. Since 1.7.1 there is a third, for staff working on the server: a request made from WP-CLI. It is recorded and sent as its own source ("from the command line"), so an inventory asked for that way is not shown as a press of the button.
 
 Sent (as `inventory_version` 1):
 
@@ -109,6 +109,9 @@ The plugin header declares `Update URI: https://github.com/Control-Yours/User-Lo
 2. Activate. Tracking starts immediately; existing users show "No login recorded" until they next sign in.
 
 == Changelog ==
+
+= 1.7.1 =
+* Site inventory: an inventory asked for from WP-CLI on the server is now recorded as its own source. Until now the plugin knew two, the Admin Dashboard and the button under Settings > CY Connector, so one started by staff over SSH had to be labelled as a press of the button. `requested_by` can now be `cli`, the settings screen says "from the command line (WP-CLI)", and the plugin only accepts that label inside a WP-CLI run. Nothing else changes; `inventory_version` stays 1.
 
 = 1.7.0 =
 * Site inventory: four additions, so a move to SiteForge can be planned without logging in to the site. Like the rest of the inventory they are sent only when one is asked for.

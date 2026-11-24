@@ -4,12 +4,13 @@
  * Control Yours Admin Dashboard so the team can plan the site's move to
  * SiteForge without logging in to it.
  *
- * Nothing is sent unless an inventory was asked for, in one of two ways:
+ * Nothing is sent unless an inventory was asked for, in one of three ways:
  *
  *  - the dashboard answers the daily snapshot with {"requests": ["inventory"]}
- *    (see CY_ULW_Reporter::handle_requests()), or
+ *    (see CY_ULW_Reporter::handle_requests()),
  *  - an administrator presses "Send site inventory now" under
- *    Settings > CY Connector.
+ *    Settings > CY Connector, or
+ *  - staff working on the server ask from WP-CLI (request( 'cli' ), since 1.7.1).
  *
  * Both only queue the one-off cy_ulw_inventory_run cron event. The inventory
  * is built and sent there, never in a login, admin or front-end request.
@@ -294,7 +295,7 @@ final class CY_ULW_Inventory {
 		return array(
 			'status'       => '',  // '', queued, running, paused, complete, failed.
 			'requested_at' => 0,   // Unix: when the inventory was asked for.
-			'requested_by' => '',  // 'dashboard' or 'button'.
+			'requested_by' => '',  // 'dashboard', 'button' or 'cli'.
 			'inventory_id' => '',  // UUID shared by every chunk of one inventory.
 			'phase'        => '',  // What is sent next: site, menus, pages, posts, redirects, forms, final.
 			'chunk'        => 0,   // Chunks the dashboard has accepted so far.
@@ -367,7 +368,9 @@ final class CY_ULW_Inventory {
 	 * event. Does nothing when reporting is off or this is a staging or local
 	 * copy, and nothing new when one is already queued or running.
 	 *
-	 * @param string $source 'dashboard' (asked for in a snapshot response) or 'button'.
+	 * @param string $source 'dashboard' (asked for in a snapshot response), 'button' (the
+	 *                       settings screen) or 'cli' (asked for from WP-CLI, by a person or a
+	 *                       script working on the server). Anything else counts as 'dashboard'.
 	 * @return bool Whether an inventory is now queued or running.
 	 */
 	public static function request( $source ) {
@@ -383,7 +386,7 @@ final class CY_ULW_Inventory {
 				array(
 					'status'       => 'queued',
 					'requested_at' => time(),
-					'requested_by' => 'button' === $source ? 'button' : 'dashboard',
+					'requested_by' => self::source( $source ),
 				)
 			);
 			self::save();
@@ -397,6 +400,24 @@ final class CY_ULW_Inventory {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Who asked, as it is recorded and sent: 'button', 'cli' or 'dashboard'.
+	 * 'cli' is only believed inside a WP-CLI run, so nothing on the web side
+	 * can label a request as coming from the command line.
+	 *
+	 * @param string $source What the caller said.
+	 * @return string
+	 */
+	private static function source( $source ) {
+		if ( 'button' === $source ) {
+			return 'button';
+		}
+		if ( 'cli' === $source && defined( 'WP_CLI' ) && WP_CLI ) {
+			return 'cli';
+		}
+		return 'dashboard';
 	}
 
 	/**
@@ -939,9 +960,13 @@ final class CY_ULW_Inventory {
 	public static function status_text() {
 		$state = self::state();
 		$now   = time();
-		$by    = 'button' === $state['requested_by']
-			? __( 'with the button on this screen', 'cy-user-login-watcher' )
-			: __( 'by the Admin Dashboard', 'cy-user-login-watcher' );
+		if ( 'button' === $state['requested_by'] ) {
+			$by = __( 'with the button on this screen', 'cy-user-login-watcher' );
+		} elseif ( 'cli' === $state['requested_by'] ) {
+			$by = __( 'from the command line (WP-CLI)', 'cy-user-login-watcher' );
+		} else {
+			$by = __( 'by the Admin Dashboard', 'cy-user-login-watcher' );
+		}
 
 		switch ( $state['status'] ) {
 			case 'queued':

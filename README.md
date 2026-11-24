@@ -79,7 +79,7 @@ The `staging` branch does not exist until the first `--staging` release. Until t
 
 ## Site inventory payload
 
-For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin sends an inventory only when asked: the dashboard answers an accepted daily snapshot (`POST /api/logins/intake`, 200 or 202) with a JSON object containing `"requests": ["inventory"]`, or an administrator presses the button under Settings > CY Connector. Other keys in that answer, and other values in `requests`, are ignored. The site keeps no record of having sent one: as long as the answer contains the request, the site sends a fresh inventory after each daily snapshot, so the dashboard should stop asking once it has a complete one.
+For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin sends an inventory only when asked: the dashboard answers an accepted daily snapshot (`POST /api/logins/intake`, 200 or 202) with a JSON object containing `"requests": ["inventory"]`, an administrator presses the button under Settings > CY Connector, or (since 1.7.1) staff ask from WP-CLI on the server. Other keys in that answer, and other values in `requests`, are ignored. The site keeps no record of having sent one: as long as the answer contains the request, the site sends a fresh inventory after each daily snapshot, so the dashboard should stop asking once it has a complete one.
 
 **Request.** One inventory is a series of `POST <dashboard>/api/sites/inventory` requests, sent one after another from WP-cron:
 
@@ -106,7 +106,7 @@ For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin se
 - `inventory_id` is a UUID shared by all chunks of one inventory. A new request gives a new ID.
 - `chunk` counts from 1 with no gaps, in the order sent. Chunks of one inventory can be minutes apart: a large site pauses and continues in a later cron run.
 - `complete` is `true` only on the last chunk, which has an empty `data` and adds `"totals": { "chunks": 9, "pages": 1009 }` (`chunks` includes the final one). An inventory whose final chunk never arrives is incomplete and should be discarded; the site does not resume it.
-- `requested_by` is `"dashboard"` or `"button"`.
+- `requested_by` is `"dashboard"`, `"button"` or, since 1.7.1, `"cli"`: asked for from WP-CLI on the server, by a person or a script working there (`CY_ULW_Inventory::request( 'cli' )` after `cy_ulw_load_inventory()`). The plugin only records `cli` inside a WP-CLI run. Show a value you do not know as it is, or as no source.
 - `data` holds one or more sections. Treat sections as independent and merge by key: list sections (`pages`, `menus`, and since 1.7.0 `posts`, `redirects` and `forms`) can be spread over several chunks and are concatenated in chunk order. Each is always sent at least once, as an empty list on a site with none. Today chunk 1 carries the single-value sections, then `menus`, then `pages` in batches of up to 200, then `posts`, `redirects` (followed by `redirect_sources`) and `forms`, but do not rely on which chunk a section arrives in. A site on a plugin older than 1.7.0 sends none of the newer sections: tell "none" from "not sent" by `site.plugin_version` in the envelope.
 - Since 1.7.0 the last chunk's `totals` also has `posts`, `redirects` and `forms` (how many of each were sent), and its `data` is no longer always empty: when part of the inventory could not be read it carries `"notes": ["Forms from wpforms could not be read: ..."]`, plain sentences for a person to read. The rest of the inventory is complete in that case.
 
