@@ -79,7 +79,7 @@ The `staging` branch does not exist until the first `--staging` release. Until t
 
 ## Site inventory payload
 
-For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin sends an inventory only when asked: the dashboard answers an accepted daily snapshot (`POST /api/logins/intake`, 200 or 202) with a JSON object containing `"requests": ["inventory"]`, or an administrator presses the button under Settings > CY Connector. Other keys in that answer, and other values in `requests`, are ignored. The site keeps no record of having sent one: as long as the answer contains the request, the site sends a fresh inventory after each daily snapshot, so the dashboard should stop asking once it has a complete one.
+For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin sends an inventory only when asked: the dashboard answers an accepted daily snapshot (`POST /api/logins/intake`, 200 or 202) with a JSON object containing `"requests": ["inventory"]`, an administrator presses the button under Settings > CY Connector, or (since 1.7.1) staff ask from WP-CLI on the server. Other keys in that answer, and other values in `requests`, are ignored. The site keeps no record of having sent one: as long as the answer contains the request, the site sends a fresh inventory after each daily snapshot, so the dashboard should stop asking once it has a complete one.
 
 **Request.** One inventory is a series of `POST <dashboard>/api/sites/inventory` requests, sent one after another from WP-cron:
 

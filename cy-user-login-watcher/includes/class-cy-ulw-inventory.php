@@ -4,12 +4,13 @@
  * Control Yours Admin Dashboard so the team can plan the site's move to
  * SiteForge without logging in to it.
  *
- * Nothing is sent unless an inventory was asked for, in one of two ways:
+ * Nothing is sent unless an inventory was asked for, in one of three ways:
  *
  *  - the dashboard answers the daily snapshot with {"requests": ["inventory"]}
- *    (see CY_ULW_Reporter::handle_requests()), or
+ *    (see CY_ULW_Reporter::handle_requests()),
  *  - an administrator presses "Send site inventory now" under
- *    Settings > CY Connector.
+ *    Settings > CY Connector, or
+ *  - staff working on the server ask from WP-CLI (request( 'cli' ), since 1.7.1).
  *
  * Both only queue the one-off cy_ulw_inventory_run cron event. The inventory
  * is built and sent there, never in a login, admin or front-end request.
