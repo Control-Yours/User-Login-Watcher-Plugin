@@ -107,7 +107,8 @@ For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin se
 - `chunk` counts from 1 with no gaps, in the order sent. Chunks of one inventory can be minutes apart: a large site pauses and continues in a later cron run.
 - `complete` is `true` only on the last chunk, which has an empty `data` and adds `"totals": { "chunks": 9, "pages": 1009 }` (`chunks` includes the final one). An inventory whose final chunk never arrives is incomplete and should be discarded; the site does not resume it.
 - `requested_by` is `"dashboard"` or `"button"`.
-- `data` holds one or more sections. Treat sections as independent and merge by key: list sections (`pages`, `menus`) can be spread over several chunks and are concatenated in chunk order. Both are always sent at least once, as an empty list on a site with none. Today chunk 1 carries the single-value sections, then `menus`, then `pages` in batches of up to 200, but do not rely on which chunk a section arrives in.
+- `data` holds one or more sections. Treat sections as independent and merge by key: list sections (`pages`, `menus`, and since 1.7.0 `posts`, `redirects` and `forms`) can be spread over several chunks and are concatenated in chunk order. Each is always sent at least once, as an empty list on a site with none. Today chunk 1 carries the single-value sections, then `menus`, then `pages` in batches of up to 200, then `posts`, `redirects` (followed by `redirect_sources`) and `forms`, but do not rely on which chunk a section arrives in. A site on a plugin older than 1.7.0 sends none of the newer sections: tell "none" from "not sent" by `site.plugin_version` in the envelope.
+- Since 1.7.0 the last chunk's `totals` also has `posts`, `redirects` and `forms` (how many of each were sent), and its `data` is no longer always empty: when part of the inventory could not be read it carries `"notes": ["Forms from wpforms could not be read: ..."]`, plain sentences for a person to read. The rest of the inventory is complete in that case.
 
 **Sections in `data`:**
 
@@ -153,7 +154,37 @@ For the dashboard side (Control-Yours/Admin-Dashboard issue #123). The plugin se
       "id": 6, "title": "Team", "slug": "team", "parent": 5, "menu_order": 1,
       "template": "templates/full-width.php", "url": "https://example.com/about/team/",
       "modified_gmt": "2026-11-10T18:04:37Z", "is_front_page": false, "is_posts_page": false,
-      "builder": "elementor"
+      "builder": "elementor",
+      "seo": { "title": "Our team %%sep%% %%sitename%%", "description": "Meet the people behind Example.", "focus_keyword": "team" }
+    }
+  ],
+  "posts": [
+    {
+      "id": 912, "type": "post", "title": "Spring news", "slug": "spring-news", "parent": 0,
+      "url": "https://example.com/2026/04/spring-news/",
+      "date_gmt": "2026-04-02T15:00:00Z", "modified_gmt": "2026-04-03T09:12:44Z",
+      "language": null, "seo": null
+    }
+  ],
+  "redirects": [
+    { "source": "/old-page/", "match": "exact", "target": "/new-page/", "code": 301, "enabled": true, "origin": "redirection" },
+    { "source": "^/news/(.*)$", "match": "regex", "target": "/blog/$1", "code": 301, "enabled": true, "origin": "redirection" }
+  ],
+  "redirect_sources": [
+    { "origin": "redirection", "listed": 2, "skipped": 0, "complete": true }
+  ],
+  "forms": [
+    {
+      "plugin": "gravityforms", "id": "1", "title": "Contact", "active": true,
+      "fields": [
+        { "label": "Name", "type": "name", "required": true },
+        { "label": "Email", "type": "email", "required": true }
+      ],
+      "notifications": [
+        { "name": "Admin Notification", "active": true, "to": ["office@example.com"] },
+        { "name": "User Notification", "active": false, "to": ["{field:2}"] }
+      ],
+      "embedded_on": [ { "id": 13, "type": "page" } ]
     }
   ]
 }
@@ -169,6 +200,11 @@ Field notes:
 - `menus[].items[]`: `parent` is the `id` of another item in the same menu, 0 at the top level. `type` is `post_type`, `taxonomy`, `post_type_archive` or `custom`; `object` is what it points at (`page`, `category`, ...) and `object_id` that page's or term's ID (for a custom link, the item's own ID). `url` can be `null`. Items whose page or term no longer exists are left out, as WordPress leaves them out of the menu.
 - `pages` are published pages only, in ascending `id` order. `parent` is a page `id`, 0 at the top level. `template` is the template file or `default`. `builder` is one of `elementor`, `wpbakery`, `divi`, `beaver-builder`, `avada`, `oxygen`, `thrive`, `siteorigin`, `kingcomposer`, `bold-builder`, `goodlayers`, `blocks`, `classic` (the seven from `avada` to `goodlayers` since 1.5.1; before that such pages were reported as `classic`). More names can follow, so show an unknown one as it is.
 - Languages (since 1.5.2). On a WPML site `site.languages` is `{"default": "en", "active": ["en", "es"]}`, and every page and menu has `language`, its WPML language code. `pages` then holds each language's version of a page as its own entry, with the address it really has in that language (`/es/acerca-de/`), and `is_front_page` / `is_posts_page` are true for that language's front page and posts page. A menu's `locations` include the locations of the menu it is a translation of. On a site with one language `site.languages` and every `language` are `null`. Before 1.5.2 a WPML site's translated menus arrived as copies of the default-language ones, and translated pages with the default-language page's address.
-- Later versions will add sections (SEO fields, redirects, forms) under new keys, so ignore keys you do not know. `inventory_version` goes up only when an existing field changes meaning.
+- SEO fields (since 1.7.0). `site.seo_plugin` is `yoast`, `rank-math`, `seopress` or `null`: the first of those that is active, and the only one whose fields are read (fields left behind by a plugin that was switched off are not sent, since the site no longer shows them). Every page and post has `seo`: `null` when none of the three fields is filled in, otherwise `title`, `description` and `focus_keyword`, each a string or `null`. They are sent as the SEO plugin stores them, so a title can hold that plugin's placeholders (`%%title%% %%sep%% %%sitename%%` in Yoast, `%sep% %sitename%` in Rank Math); a page with no title of its own uses the plugin's site-wide template, which is a setting and is not sent. `focus_keyword` can be several, separated by commas. Each value is cut at 600 characters.
+- `posts` (since 1.7.0): published items of every public content type whose items have their own address on the site (`publicly_queryable`), except pages and media: blog posts and custom post types. A type listed in `post_types` that is public but has no addresses is not listed here. For each type the newest 500 at most (highest ID first); compare with that type's `published` in `post_types` to see whether a type was cut off. `type` is the post type. `parent` is 0 except for a hierarchical type. `url`, `date_gmt` and `modified_gmt` can be `null`. `language` and `seo` are as for pages. No content, excerpt, author or term is sent. Types a builder registers as public (`elementor_library` and the like) are listed too: filter by `type`.
+- `redirects` (since 1.7.0): rules from the Redirection plugin, Yoast SEO Premium, Rank Math and SEOPress, each read only while its plugin is active, 5,000 at most in all. `source` is the address or pattern as that plugin stores it (Redirection with a leading slash, Yoast SEO Premium without). `match` is `exact`, `regex`, `contains`, `start` or `end`. `target` is `null` for a rule that only answers with a status (410). `enabled` is false for a rule that is switched off, for a Redirection rule in a group that is switched off, and for every Rank Math rule while Rank Math's Redirections module is off. `origin` is `redirection`, `yoast-premium`, `rank-math` or `seopress`. Addresses are the site's own as stored, so on a copy they can point at another host.
+- `redirect_sources` (since 1.7.0): one entry per redirect source in use on the site, in the order read: how many rules were `listed`, how many were `skipped` (Redirection rules that depend on login state, referrer or browser, or that answer with an error or pass the request through; a rule whose data could not be read), and `complete`, false when the 5,000 cap cut the source off or it could not be read (then `notes` says why). An empty list means the site has no redirect plugin this version reads. Redirects made in `.htaccess`, by the host or by another plugin are not seen.
+- `forms` (since 1.7.0): forms from Gravity Forms, Formidable, WPForms, Contact Form 7 and Elementor Pro / PRO Elements, each read only while its plugin is active, 200 per plugin at most. `plugin` is `gravityforms`, `formidable`, `wpforms`, `contact-form-7` or `elementor`. `id` is the form's ID in that plugin, always a string; for Elementor it is the form widget's ID, which is unique within its page only. `active` is false for a Gravity Forms form that is switched off or a Formidable draft. `fields` lists each field's `label`, the plugin's own `type` name and `required`, 200 at most; layout fields (HTML, section, page break) are included. Contact Form 7 fields have no label, so `label` is the field's name (`your-email`). For Elementor `fields` is `null` when the form still has Elementor's default Name, Email and Message fields, which Elementor does not store. `notifications` are the emails the form sends: `name`, `active`, and `to`, a list of recipients. Only the To line is read: anyone who gets the email by CC or BCC is not listed. The site's admin address is filled in where the form uses a placeholder for it; any other placeholder is left as written (`[your-email]`, or `{field:2}` for a Gravity Forms notification sent to the address typed into field 2), so an entry without an `@` is not a fixed address. A Gravity Forms notification that picks its recipient by an answer lists every address it can go to. `embedded_on` names the published posts (`id` and post `type`) whose content, or whose Elementor layout, holds the form's shortcode or block, 100 at most; a form placed by a sidebar widget, a theme file or a pop-up plugin shows an empty list. Form entries are never read.
+- Later versions can add sections under new keys, so ignore keys you do not know. `inventory_version` goes up only when an existing field changes meaning.
 
 To try it without the real dashboard, define `CY_ULW_DASHBOARD_URL` in wp-config.php as `http://<host>:<port>/api/logins/intake`; the inventory then goes to `/api/sites/inventory` on that host. The constant must end in `/api/logins/intake`, or no inventory is sent. On a staging or local copy also define `CY_ULW_DASHBOARD_REPORTING` as `true`, or nothing is sent.
