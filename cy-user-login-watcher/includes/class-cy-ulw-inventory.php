@@ -176,6 +176,12 @@ final class CY_ULW_Inventory {
 	const EMBED_MAX_BYTES  = 4000000;
 
 	/**
+	 * Seconds one such look through pages may take. Past it the look stops
+	 * and the inventory says so, instead of running into PHP's time limit.
+	 */
+	const EMBED_SECONDS = 8;
+
+	/**
 	 * Attachments read per query when adding up media sizes.
 	 */
 	const MEDIA_BATCH = 500;
@@ -743,9 +749,10 @@ final class CY_ULW_Inventory {
 	 * @param string $message What happened, in plain words.
 	 */
 	private static function note( $message ) {
-		$notes = (array) self::$state['notes'];
-		if ( count( $notes ) < 20 ) {
-			$notes[]              = self::short( $message, 200 );
+		$notes   = (array) self::$state['notes'];
+		$message = self::short( $message, 200 );
+		if ( count( $notes ) < 20 && ! in_array( $message, $notes, true ) ) {
+			$notes[]              = $message;
 			self::$state['notes'] = $notes;
 		}
 	}
@@ -1622,6 +1629,32 @@ final class CY_ULW_Inventory {
 	}
 
 	/**
+	 * Rows of a query on another plugin's data, or an exception when the
+	 * query failed: a table laid out differently by an old version must read
+	 * as "could not be read", not as "there are none". The callers' steps
+	 * turn the exception into a note.
+	 *
+	 * @param string $sql Query, already prepared.
+	 * @return object[]
+	 * @throws Exception When the database reports an error.
+	 */
+	private static function rows( $sql ) {
+		global $wpdb;
+
+		$show = $wpdb->hide_errors(); // The error is reported in the notes, not printed into the cron run.
+		$rows = $wpdb->get_results( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Prepared by the caller.
+		$fail = (string) $wpdb->last_error;
+		if ( $show ) {
+			$wpdb->show_errors();
+		}
+
+		if ( '' !== $fail ) {
+			throw new Exception( 'the database answered "' . self::short( $fail, 120 ) . '"' );
+		}
+		return (array) $rows;
+	}
+
+	/**
 	 * The SEO plugin whose fields are read: the first active one of Yoast,
 	 * Rank Math and SEOPress. Fields left behind by one that was switched off
 	 * are not read, since the site no longer shows them.
@@ -1695,14 +1728,31 @@ final class CY_ULW_Inventory {
 	}
 
 	/**
-	 * The public content types whose posts are listed: all but pages (listed
-	 * in full under "pages") and media. Sorted by name, so the order is the
-	 * same in every cron run of one inventory.
+	 * The content types whose posts are listed: the public ones whose items
+	 * have an address of their own on the site, all but pages (listed in full
+	 * under "pages") and media. A type that is public in name only, with no
+	 * addresses, may be a plugin's own records and is left alone. Sorted by
+	 * name, so the order is the same in every cron run of one inventory.
 	 *
 	 * @return string[]
 	 */
 	private static function listed_types() {
-		$types = array_values( array_diff( array_map( 'strval', array_keys( get_post_types( array( 'public' => true ) ) ) ), array( 'page', 'attachment' ) ) );
+		$types = array_values(
+			array_diff(
+				array_map(
+					'strval',
+					array_keys(
+						get_post_types(
+							array(
+								'public'             => true,
+								'publicly_queryable' => true,
+							)
+						)
+					)
+				),
+				array( 'page', 'attachment' )
+			)
+		);
 		sort( $types );
 		return $types;
 	}
@@ -1839,12 +1889,21 @@ final class CY_ULW_Inventory {
 				if ( ! self::has_plugin( array( 'redirection' ) ) || ! self::table_exists( $table ) ) {
 					return $result;
 				}
-				$rows = $wpdb->get_results(
-					$wpdb->prepare(
-						"SELECT id, url, regex, status, action_type, action_code, action_data, match_type FROM {$table} WHERE id > %d ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
-						(int) $after,
-						self::REDIRECT_BATCH
-					)
+				// Redirection applies a rule only when the rule and the group it
+				// is filed under are both enabled.
+				$groups = $wpdb->prefix . 'redirection_groups';
+				$rows   = self::rows(
+					self::table_exists( $groups )
+						? $wpdb->prepare(
+							"SELECT i.id, i.url, i.regex, i.status, i.action_type, i.action_code, i.action_data, i.match_type, g.status AS group_status FROM {$table} i LEFT JOIN {$groups} g ON g.id = i.group_id WHERE i.id > %d ORDER BY i.id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table names are the prefix plus fixed names.
+							(int) $after,
+							self::REDIRECT_BATCH
+						)
+						: $wpdb->prepare(
+							"SELECT id, url, regex, status, action_type, action_code, action_data, match_type, NULL AS group_status FROM {$table} WHERE id > %d ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+							(int) $after,
+							self::REDIRECT_BATCH
+						)
 				);
 				$result['in_use'] = true;
 				foreach ( (array) $rows as $row ) {
@@ -1853,7 +1912,7 @@ final class CY_ULW_Inventory {
 						$result['skipped']++;
 						continue;
 					}
-					$result['items'][] = self::redirect( $origin, $row->url, (int) $row->regex ? 'regex' : 'exact', $row->action_data, $row->action_code, 'enabled' === $row->status );
+					$result['items'][] = self::redirect( $origin, $row->url, (int) $row->regex ? 'regex' : 'exact', $row->action_data, $row->action_code, 'enabled' === $row->status && 'disabled' !== $row->group_status );
 				}
 				$result['done'] = count( (array) $rows ) < self::REDIRECT_BATCH;
 				return $result;
@@ -1889,7 +1948,7 @@ final class CY_ULW_Inventory {
 				if ( ! self::has_plugin( self::SEO_PLUGINS['rank-math'] ) || ! self::table_exists( $table ) ) {
 					return $result;
 				}
-				$rows = $wpdb->get_results(
+				$rows = self::rows(
 					$wpdb->prepare(
 						"SELECT id, sources, url_to, header_code, status FROM {$table} WHERE id > %d AND status <> 'trashed' ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
 						(int) $after,
@@ -1897,6 +1956,8 @@ final class CY_ULW_Inventory {
 					)
 				);
 				$result['in_use'] = true;
+				// Rank Math applies its rules only while its Redirections module is switched on.
+				$module_on = in_array( 'redirections', (array) get_option( 'rank_math_modules', array() ), true );
 				foreach ( (array) $rows as $row ) {
 					$result['after'] = (int) $row->id;
 					$sources         = @unserialize( (string) $row->sources, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- Rank Math's own array, read without instantiating anything; a broken value is counted as skipped.
@@ -1905,7 +1966,7 @@ final class CY_ULW_Inventory {
 						if ( ! is_array( $source ) || ! isset( $source['pattern'] ) || ! is_scalar( $source['pattern'] ) || '' === trim( (string) $source['pattern'] ) ) {
 							continue;
 						}
-						$result['items'][] = self::redirect( $origin, $source['pattern'], isset( $source['comparison'] ) ? (string) $source['comparison'] : 'exact', $row->url_to, $row->header_code, 'active' === $row->status );
+						$result['items'][] = self::redirect( $origin, $source['pattern'], isset( $source['comparison'] ) ? (string) $source['comparison'] : 'exact', $row->url_to, $row->header_code, $module_on && 'active' === $row->status );
 						$listed++;
 					}
 					if ( ! $listed ) {
@@ -1921,7 +1982,7 @@ final class CY_ULW_Inventory {
 				}
 				// One post per rule, of the same type as SEOPress's log of
 				// 404s; only the ones that carry a target are rules.
-				$rows = $wpdb->get_results(
+				$rows = self::rows(
 					$wpdb->prepare(
 						"SELECT p.ID, p.post_title, p.post_status, MIN( LEFT( m.meta_value, 2001 ) ) AS target
 						FROM {$wpdb->posts} p
@@ -1941,7 +2002,7 @@ final class CY_ULW_Inventory {
 				}
 				$meta = array();
 				if ( $ids ) {
-					$meta_rows = $wpdb->get_results(
+					$meta_rows = self::rows(
 						"SELECT post_id, meta_key, LEFT( meta_value, 20 ) AS meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('_seopress_redirections_type', '_seopress_redirections_enabled', '_seopress_redirections_enabled_regex') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- The IDs are integers from the query above.
 					);
 					foreach ( (array) $meta_rows as $meta_row ) {
@@ -2074,6 +2135,11 @@ final class CY_ULW_Inventory {
 		$list  = array();
 		foreach ( $parts as $part ) {
 			$part = trim( str_ireplace( array( '{admin_email}', '[admin_email]', '[_site_admin_email]' ), $admin, (string) $part ) );
+			// "Front Desk <office@example.com>": keep the address, which
+			// would otherwise be removed as if it were an HTML tag.
+			if ( preg_match( '/<\s*([^<>\s]+@[^<>\s]+)\s*>/', $part, $address ) ) {
+				$part = $address[1];
+			}
 			if ( '' !== $part ) {
 				$list[] = self::clip( self::plain( $part ), 200 );
 			}
@@ -2117,7 +2183,7 @@ final class CY_ULW_Inventory {
 			return array();
 		}
 
-		$rows = $wpdb->get_results(
+		$rows = self::rows(
 			$wpdb->prepare(
 				"SELECT id, title, is_active FROM {$forms_table} WHERE is_trash = 0 ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
 				self::FORMS_PER_PLUGIN
@@ -2206,7 +2272,7 @@ final class CY_ULW_Inventory {
 
 		// Templates are not forms on the site, and a form with a parent is a
 		// repeating section of that parent.
-		$rows = $wpdb->get_results(
+		$rows = self::rows(
 			$wpdb->prepare(
 				"SELECT id, form_key, name, status FROM {$forms_table} WHERE is_template = 0 AND ( parent_form_id IS NULL OR parent_form_id = 0 ) AND status IN ( 'published', 'draft' ) ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
 				self::FORMS_PER_PLUGIN
@@ -2226,12 +2292,12 @@ final class CY_ULW_Inventory {
 
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name; the IDs are integers.
 		$fields = array();
-		foreach ( (array) $wpdb->get_results( "SELECT form_id, name, type, required FROM {$fields_table} WHERE form_id IN ($in) ORDER BY form_id ASC, field_order ASC, id ASC" ) as $field ) {
+		foreach ( (array) self::rows( "SELECT form_id, name, type, required FROM {$fields_table} WHERE form_id IN ($in) ORDER BY form_id ASC, field_order ASC, id ASC" ) as $field ) {
 			$fields[ (int) $field->form_id ][] = self::field( $field->name, $field->type, (int) $field->required );
 		}
 
 		$notifications = array();
-		foreach ( (array) $wpdb->get_results( "SELECT post_title, post_status, menu_order, post_content FROM {$wpdb->posts} WHERE post_type = 'frm_form_actions' AND post_excerpt = 'email' AND post_status IN ( 'publish', 'draft' ) AND menu_order IN ($in) ORDER BY ID ASC" ) as $action ) {
+		foreach ( (array) self::rows( "SELECT post_title, post_status, menu_order, post_content FROM {$wpdb->posts} WHERE post_type = 'frm_form_actions' AND post_excerpt = 'email' AND post_status IN ( 'publish', 'draft' ) AND menu_order IN ($in) ORDER BY ID ASC" ) as $action ) {
 			$settings                                     = self::decode( $action->post_content );
 			$notifications[ (int) $action->menu_order ][] = self::notification( $action->post_title, 'publish' === $action->post_status, isset( $settings['email_to'] ) ? $settings['email_to'] : '' );
 		}
@@ -2272,7 +2338,7 @@ final class CY_ULW_Inventory {
 	private static function forms_wpforms() {
 		global $wpdb;
 
-		$rows = $wpdb->get_results(
+		$rows = self::rows(
 			$wpdb->prepare(
 				"SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE post_type = 'wpforms' AND post_status = 'publish' ORDER BY ID ASC LIMIT %d",
 				self::FORMS_PER_PLUGIN
@@ -2337,7 +2403,7 @@ final class CY_ULW_Inventory {
 	private static function forms_cf7() {
 		global $wpdb;
 
-		$rows = $wpdb->get_results(
+		$rows = self::rows(
 			$wpdb->prepare(
 				"SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = 'wpcf7_contact_form' AND post_status = 'publish' ORDER BY ID ASC LIMIT %d",
 				self::FORMS_PER_PLUGIN
@@ -2353,7 +2419,7 @@ final class CY_ULW_Inventory {
 		}
 
 		$meta      = array();
-		$meta_rows = $wpdb->get_results(
+		$meta_rows = self::rows(
 			"SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('_form', '_mail', '_mail_2', '_hash') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- The IDs are integers from the query above.
 		);
 		foreach ( (array) $meta_rows as $meta_row ) {
@@ -2452,7 +2518,7 @@ final class CY_ULW_Inventory {
 			return array();
 		}
 
-		$posts = $wpdb->get_results(
+		$posts = self::rows(
 			$wpdb->prepare(
 				"SELECT p.ID, p.post_type, m.meta_id, LENGTH( m.meta_value ) AS bytes
 				FROM {$wpdb->postmeta} m
@@ -2468,10 +2534,15 @@ final class CY_ULW_Inventory {
 		$forms   = array();
 		$seen    = array();
 		$too_big = 0;
+		$started = microtime( true );
 
 		foreach ( (array) $posts as $post ) {
 			if ( count( $forms ) >= self::FORMS_PER_PLUGIN || isset( $seen[ (int) $post->ID ] ) ) {
 				continue;
+			}
+			if ( microtime( true ) - $started > self::EMBED_SECONDS ) {
+				self::note( 'Reading Elementor forms was stopped after ' . self::EMBED_SECONDS . ' seconds, so some may be missing.' );
+				break;
 			}
 			$seen[ (int) $post->ID ] = true;
 
@@ -2632,13 +2703,13 @@ final class CY_ULW_Inventory {
 		}
 
 		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- The post types went through esc_sql(); the LIKE clauses are built from placeholders only.
-		$in_content = $wpdb->get_results(
+		$in_content = self::rows(
 			$wpdb->prepare(
 				"SELECT p.ID, p.post_type, LENGTH( p.post_content ) AS bytes FROM {$wpdb->posts} p WHERE p.post_status = 'publish' AND p.post_type IN ($in_types) AND ( " . implode( ' OR ', $content_like ) . ' ) ORDER BY p.ID ASC LIMIT %d',
 				array_merge( $values, array( self::EMBED_SCAN_POSTS ) )
 			)
 		);
-		$in_layout  = $wpdb->get_results(
+		$in_layout  = self::rows(
 			$wpdb->prepare(
 				"SELECT p.ID, p.post_type, m.meta_id, LENGTH( m.meta_value ) AS bytes FROM {$wpdb->postmeta} m INNER JOIN {$wpdb->posts} p ON p.ID = m.post_id WHERE m.meta_key = '_elementor_data' AND p.post_status = 'publish' AND p.post_type IN ($in_types) AND ( " . implode( ' OR ', $meta_like ) . ' ) ORDER BY p.ID ASC LIMIT %d',
 				array_merge( $values, array( self::EMBED_SCAN_POSTS ) )
@@ -2658,9 +2729,6 @@ final class CY_ULW_Inventory {
 				foreach ( $matches[1] as $ref ) {
 					$ref = strtolower( (string) $ref );
 					$ref = isset( $aliases[ $ref ] ) ? $aliases[ $ref ] : $ref;
-					if ( ctype_digit( $ref ) ) {
-						$ref = (string) (int) $ref; // "07" and "7" are one form.
-					}
 					$embeds[ $ref ] = self::merge_embeds(
 						isset( $embeds[ $ref ] ) ? $embeds[ $ref ] : array(),
 						array(
@@ -2674,15 +2742,34 @@ final class CY_ULW_Inventory {
 			}
 		};
 
-		foreach ( (array) $in_content as $post ) {
-			if ( (int) $post->bytes <= self::EMBED_MAX_BYTES ) {
-				$collect( $post, $wpdb->get_var( $wpdb->prepare( "SELECT post_content FROM {$wpdb->posts} WHERE ID = %d", (int) $post->ID ) ) );
+		$started = microtime( true );
+		$too_big = 0;
+		$stopped = false;
+
+		foreach ( array( 'content' => (array) $in_content, 'layout' => (array) $in_layout ) as $where => $posts ) {
+			foreach ( $posts as $post ) {
+				if ( microtime( true ) - $started > self::EMBED_SECONDS ) {
+					$stopped = true;
+					break 2;
+				}
+				if ( (int) $post->bytes > self::EMBED_MAX_BYTES ) {
+					$too_big++;
+					continue;
+				}
+				$collect(
+					$post,
+					'content' === $where
+						? $wpdb->get_var( $wpdb->prepare( "SELECT post_content FROM {$wpdb->posts} WHERE ID = %d", (int) $post->ID ) )
+						: $wpdb->get_var( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_id = %d", (int) $post->meta_id ) )
+				);
 			}
 		}
-		foreach ( (array) $in_layout as $post ) {
-			if ( (int) $post->bytes <= self::EMBED_MAX_BYTES ) {
-				$collect( $post, $wpdb->get_var( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_id = %d", (int) $post->meta_id ) ) );
-			}
+
+		if ( $stopped ) {
+			self::note( 'Looking for the pages that embed forms (' . $needles[0] . ') was stopped after ' . self::EMBED_SECONDS . ' seconds, so "embedded_on" may be incomplete.' );
+		}
+		if ( $too_big ) {
+			self::note( $too_big . ' pages that may embed a form (' . $needles[0] . ') were too large to read, so "embedded_on" may be incomplete.' );
 		}
 
 		return $embeds;
