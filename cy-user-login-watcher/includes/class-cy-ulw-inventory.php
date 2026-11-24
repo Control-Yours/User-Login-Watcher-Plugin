@@ -17,10 +17,15 @@
  * What is collected (inventory_version 1): site identity, theme, installed
  * plugins, public content types with counts, published pages (structure and
  * the builder each was made with), menus, a media count and size, and a few
- * yes/no flags derived from the active plugins. What is never collected:
- * users, form entries, orders, customers, option values and post content.
- * Page content is tested for builder markup inside the database query and is
- * not read by this class.
+ * yes/no flags derived from the active plugins. Since 1.7.0 also: the SEO
+ * title, description and focus keyword of each page and post, the newest
+ * published posts of every other public content type, redirect rules, and
+ * forms (field labels and types, who is notified, where each is embedded).
+ * What is never collected: users, form entries, orders, customers, option
+ * values and post content. Page content is tested for builder markup inside
+ * the database query. The one place content is read is to find which form a
+ * page embeds: a page that holds a form shortcode, block or Elementor form
+ * widget is read to pick out the form's ID, and nothing else of it is kept.
  *
  * It is sent as a series of JSON chunks, each under 1 MB, sharing one
  * inventory ID and numbered from 1; the last chunk is marked complete. A run
@@ -91,6 +96,84 @@ final class CY_ULW_Inventory {
 	 * read whole).
 	 */
 	const META_PREFIX = 191;
+
+	/**
+	 * Most posts listed for one content type other than pages: the newest
+	 * ones. The type's full count is in post_types.
+	 */
+	const POSTS_PER_TYPE = 500;
+
+	/**
+	 * Post meta holding the SEO title, description and focus keyword, by the
+	 * SEO plugin that wrote it. Plain names only; they go into the query as
+	 * they are.
+	 */
+	const SEO_META_KEYS = array(
+		'yoast'     => array(
+			'title'         => '_yoast_wpseo_title',
+			'description'   => '_yoast_wpseo_metadesc',
+			'focus_keyword' => '_yoast_wpseo_focuskw',
+		),
+		'rank-math' => array(
+			'title'         => 'rank_math_title',
+			'description'   => 'rank_math_description',
+			'focus_keyword' => 'rank_math_focus_keyword',
+		),
+		'seopress'  => array(
+			'title'         => '_seopress_titles_title',
+			'description'   => '_seopress_titles_desc',
+			'focus_keyword' => '_seopress_analysis_target_kw',
+		),
+	);
+
+	/**
+	 * Active plugin folders behind each SEO plugin name, in the order they are tried.
+	 */
+	const SEO_PLUGINS = array(
+		'yoast'     => array( 'wordpress-seo', 'wordpress-seo-premium' ),
+		'rank-math' => array( 'seo-by-rank-math', 'seo-by-rank-math-pro' ),
+		'seopress'  => array( 'wp-seopress', 'wp-seopress-pro' ),
+	);
+
+	/**
+	 * Characters kept of an SEO value. Longer than any search engine shows.
+	 */
+	const SEO_MAX_LENGTH = 600;
+
+	/**
+	 * Where redirect rules are read from, in this order.
+	 */
+	const REDIRECT_ORIGINS = array( 'redirection', 'yoast-premium', 'rank-math', 'seopress' );
+
+	/**
+	 * Redirect rows read per query.
+	 */
+	const REDIRECT_BATCH = 500;
+
+	/**
+	 * Most redirect rules listed in one inventory.
+	 */
+	const REDIRECT_CAP = 5000;
+
+	/**
+	 * Form plugins read, in this order.
+	 */
+	const FORM_ORIGINS = array( 'gravityforms', 'formidable', 'wpforms', 'contact-form-7', 'elementor' );
+
+	/**
+	 * Most forms listed for one form plugin, most fields listed for one form,
+	 * and most pages named as embedding one form.
+	 */
+	const FORMS_PER_PLUGIN = 200;
+	const FIELDS_PER_FORM  = 200;
+	const EMBEDS_PER_FORM  = 100;
+
+	/**
+	 * Most pages looked at when finding where forms are embedded, and the
+	 * largest page content or Elementor layout that is read for it, in bytes.
+	 */
+	const EMBED_SCAN_POSTS = 2000;
+	const EMBED_MAX_BYTES  = 4000000;
 
 	/**
 	 * Attachments read per query when adding up media sizes.
@@ -207,10 +290,21 @@ final class CY_ULW_Inventory {
 			'requested_at' => 0,   // Unix: when the inventory was asked for.
 			'requested_by' => '',  // 'dashboard' or 'button'.
 			'inventory_id' => '',  // UUID shared by every chunk of one inventory.
-			'phase'        => '',  // What is sent next: site, menus, pages, final.
+			'phase'        => '',  // What is sent next: site, menus, pages, posts, redirects, forms, final.
 			'chunk'        => 0,   // Chunks the dashboard has accepted so far.
 			'after_id'     => 0,   // Pages up to this ID have been sent.
 			'pages'        => 0,   // Pages sent so far.
+			'type_index'   => 0,   // Posts: which content type is being listed (see listed_types()).
+			'before_id'    => 0,   // Posts of that type down to this ID have been sent; 0 = none yet.
+			'type_sent'    => 0,   // Posts of that type sent so far.
+			'posts'        => 0,   // Posts sent so far, all types.
+			'origin_index' => 0,   // Redirects, then forms: which source is being read.
+			'origin_after' => 0,   // Redirects: rows of that source up to this ID have been read.
+			'origin_stats' => array(), // Redirects: rules listed and left out for the source being read.
+			'sources'      => array(), // Redirects: one summary per source already read.
+			'redirects'    => 0,   // Redirect rules sent so far.
+			'forms'        => 0,   // Forms sent so far.
+			'notes'        => array(), // Parts that could not be read, in plain words. Sent with the last chunk.
 			'runs'         => 0,   // Cron runs this inventory has used.
 			'started_at'   => 0,   // Unix: first cron run.
 			'heartbeat'    => 0,   // Unix: last sign of life from a run.
@@ -450,22 +544,210 @@ final class CY_ULW_Inventory {
 					self::$state['pages']    = (int) self::$state['pages'] + count( $pages );
 				}
 				if ( count( $pages ) < self::PAGE_BATCH ) {
-					self::$state['phase'] = 'final';
+					self::$state['phase'] = 'posts';
 				}
 				return false;
 
+			case 'posts':
+				self::step_posts();
+				return false;
+
+			case 'redirects':
+				self::step_redirects();
+				return false;
+
+			case 'forms':
+				self::step_forms();
+				return false;
+
 			case 'final':
+				$notes = array_values( array_filter( array_map( 'strval', (array) self::$state['notes'] ) ) );
 				self::send(
-					array(),
+					$notes ? array( 'notes' => $notes ) : array(),
 					array(
-						'chunks' => (int) self::$state['chunk'] + 1,
-						'pages'  => (int) self::$state['pages'],
+						'chunks'    => (int) self::$state['chunk'] + 1,
+						'pages'     => (int) self::$state['pages'],
+						'posts'     => (int) self::$state['posts'],
+						'redirects' => (int) self::$state['redirects'],
+						'forms'     => (int) self::$state['forms'],
 					)
 				);
 				return true;
 		}
 
 		throw new RuntimeException( 'The saved inventory state is not usable; ask for the inventory again.' );
+	}
+
+	/**
+	 * Posts phase: send the next batch of the content type being listed, or
+	 * move on to the next type. Every public type other than pages and media
+	 * is listed, newest first, up to POSTS_PER_TYPE each.
+	 *
+	 * @throws RuntimeException When a chunk cannot be sent or is not accepted.
+	 */
+	private static function step_posts() {
+		$types = self::listed_types();
+		$index = (int) self::$state['type_index'];
+
+		if ( ! isset( $types[ $index ] ) ) {
+			if ( 0 === (int) self::$state['posts'] ) {
+				self::send_list( 'posts', array() ); // The section is always present.
+			}
+			self::$state['phase']        = 'redirects';
+			self::$state['origin_index'] = 0;
+			self::$state['origin_after'] = 0;
+			self::$state['origin_stats'] = array();
+			return;
+		}
+
+		$want  = min( self::PAGE_BATCH, self::POSTS_PER_TYPE - (int) self::$state['type_sent'] );
+		$posts = $want > 0 ? self::posts( $types[ $index ], (int) self::$state['before_id'], $want ) : array();
+
+		if ( $posts ) {
+			self::send_list( 'posts', $posts );
+			self::$state['before_id'] = (int) $posts[ count( $posts ) - 1 ]['id'];
+			self::$state['type_sent'] = (int) self::$state['type_sent'] + count( $posts );
+			self::$state['posts']     = (int) self::$state['posts'] + count( $posts );
+		}
+
+		if ( count( $posts ) < $want || (int) self::$state['type_sent'] >= self::POSTS_PER_TYPE ) {
+			self::$state['type_index'] = $index + 1;
+			self::$state['before_id']  = 0;
+			self::$state['type_sent']  = 0;
+		}
+	}
+
+	/**
+	 * Redirects phase: read the next batch of rules from the source being
+	 * read, or move on to the next source. Ends by sending one summary per
+	 * source, so a site without redirects still says so.
+	 *
+	 * A source whose data cannot be read is skipped and named in the notes:
+	 * another plugin's odd data must not cost the whole inventory.
+	 *
+	 * @throws RuntimeException When a chunk cannot be sent or is not accepted.
+	 */
+	private static function step_redirects() {
+		$index = (int) self::$state['origin_index'];
+
+		if ( ! isset( self::REDIRECT_ORIGINS[ $index ] ) ) {
+			$data = array( 'redirect_sources' => array_values( (array) self::$state['sources'] ) );
+			if ( 0 === (int) self::$state['redirects'] ) {
+				$data['redirects'] = array(); // The section is always present.
+			}
+			self::send( $data );
+			self::$state['phase']        = 'forms';
+			self::$state['origin_index'] = 0;
+			self::$state['origin_after'] = 0;
+			return;
+		}
+
+		$origin = self::REDIRECT_ORIGINS[ $index ];
+		$stats  = array_merge(
+			array(
+				'listed'  => 0,
+				'skipped' => 0,
+			),
+			(array) self::$state['origin_stats']
+		);
+		$room   = max( 0, self::REDIRECT_CAP - (int) self::$state['redirects'] );
+		$batch  = null;
+
+		// Only the reading is guarded. A chunk the dashboard refuses still
+		// ends the inventory, as everywhere else.
+		try {
+			$batch = self::redirect_batch( $origin, (int) self::$state['origin_after'] );
+		} catch ( Throwable $e ) {
+			self::note( 'Redirects from ' . $origin . ' could not be read: ' . $e->getMessage() );
+		}
+
+		if ( null === $batch ) {
+			$in_use   = true;
+			$complete = false;
+		} else {
+			$items             = array_slice( $batch['items'], 0, $room );
+			$cut               = count( $items ) < count( $batch['items'] ); // The cap was reached.
+			$stats['listed']  += count( $items );
+			$stats['skipped'] += (int) $batch['skipped'];
+
+			if ( $items ) {
+				self::send_list( 'redirects', $items );
+				self::$state['redirects'] = (int) self::$state['redirects'] + count( $items );
+			}
+
+			if ( ! $cut && ! $batch['done'] ) {
+				self::$state['origin_after'] = (int) $batch['after'];
+				self::$state['origin_stats'] = $stats;
+				return;
+			}
+
+			$in_use   = (bool) $batch['in_use'];
+			$complete = ! $cut;
+		}
+
+		// A source that is not in use on this site is left out of the summary.
+		if ( $in_use ) {
+			$sources                = (array) self::$state['sources'];
+			$sources[]              = array(
+				'origin'   => $origin,
+				'listed'   => (int) $stats['listed'],
+				'skipped'  => (int) $stats['skipped'],
+				'complete' => $complete,
+			);
+			self::$state['sources'] = $sources;
+		}
+
+		self::$state['origin_index'] = $index + 1;
+		self::$state['origin_after'] = 0;
+		self::$state['origin_stats'] = array();
+	}
+
+	/**
+	 * Forms phase: send the forms of the next form plugin. A plugin whose
+	 * data cannot be read is skipped and named in the notes.
+	 *
+	 * @throws RuntimeException When a chunk cannot be sent or is not accepted.
+	 */
+	private static function step_forms() {
+		$index = (int) self::$state['origin_index'];
+
+		if ( ! isset( self::FORM_ORIGINS[ $index ] ) ) {
+			if ( 0 === (int) self::$state['forms'] ) {
+				self::send_list( 'forms', array() ); // The section is always present.
+			}
+			self::$state['phase'] = 'final';
+			return;
+		}
+
+		$origin = self::FORM_ORIGINS[ $index ];
+		$forms  = array();
+
+		try {
+			$forms = self::forms( $origin );
+		} catch ( Throwable $e ) {
+			self::note( 'Forms from ' . $origin . ' could not be read: ' . $e->getMessage() );
+		}
+
+		if ( $forms ) {
+			self::send_list( 'forms', $forms );
+			self::$state['forms'] = (int) self::$state['forms'] + count( $forms );
+		}
+
+		self::$state['origin_index'] = $index + 1;
+	}
+
+	/**
+	 * Remember that a part of the inventory could not be read. The notes go
+	 * out with the last chunk.
+	 *
+	 * @param string $message What happened, in plain words.
+	 */
+	private static function note( $message ) {
+		$notes = (array) self::$state['notes'];
+		if ( count( $notes ) < 20 ) {
+			$notes[]              = self::short( $message, 200 );
+			self::$state['notes'] = $notes;
+		}
 	}
 
 	/**
@@ -746,6 +1028,7 @@ final class CY_ULW_Inventory {
 			'php_version'         => PHP_VERSION,
 			'multisite'           => is_multisite(),
 			'languages'           => self::site_languages(),
+			'seo_plugin'          => self::seo_plugin(), // yoast, rank-math, seopress or null. Since 1.7.0.
 		);
 	}
 
@@ -1249,11 +1532,12 @@ final class CY_ULW_Inventory {
 			$languages[ $index ] = isset( $known[ (int) $row->ID ] ) ? $known[ (int) $row->ID ]['language'] : null;
 		}
 		$special = array();
+		$seo     = self::seo_for( $ids );
 
 		return self::each_in_language(
 			$rows,
 			$languages,
-			function ( $row, $language, $answering ) use ( $meta, &$special ) {
+			function ( $row, $language, $answering ) use ( $meta, $seo, &$special ) {
 				$id        = (int) $row->ID;
 				$page_meta = isset( $meta[ $id ] ) ? $meta[ $id ] : array();
 				$template  = isset( $page_meta['_wp_page_template'] ) && '' !== $page_meta['_wp_page_template'] ? $page_meta['_wp_page_template'] : 'default';
@@ -1292,9 +1576,1137 @@ final class CY_ULW_Inventory {
 						)
 					),
 					'language'      => $language, // WPML language code; null on a site with one language.
+					'seo'           => isset( $seo[ $id ] ) ? $seo[ $id ] : null, // Since 1.7.0.
 				);
 			}
 		);
+	}
+
+	/* ---------------------------------------------------------------------
+	 * Collectors added in 1.7.0: SEO fields, posts, redirects, forms
+	 * ------------------------------------------------------------------ */
+
+	/**
+	 * Folders of the active plugins, read once per request.
+	 *
+	 * @return string[]
+	 */
+	private static function active_slugs() {
+		static $slugs = null;
+		if ( null === $slugs ) {
+			$list  = self::plugins();
+			$slugs = $list['active_slugs'];
+		}
+		return $slugs;
+	}
+
+	/**
+	 * Whether any of these plugin folders is active.
+	 *
+	 * @param string[] $slugs Plugin folders.
+	 * @return bool
+	 */
+	private static function has_plugin( array $slugs ) {
+		return (bool) array_intersect( $slugs, self::active_slugs() );
+	}
+
+	/**
+	 * Whether a database table exists.
+	 *
+	 * @param string $table Full table name, prefix included.
+	 * @return bool
+	 */
+	private static function table_exists( $table ) {
+		global $wpdb;
+		return (string) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) === $table;
+	}
+
+	/**
+	 * The SEO plugin whose fields are read: the first active one of Yoast,
+	 * Rank Math and SEOPress. Fields left behind by one that was switched off
+	 * are not read, since the site no longer shows them.
+	 *
+	 * @return string|null yoast, rank-math, seopress or null.
+	 */
+	private static function seo_plugin() {
+		foreach ( self::SEO_PLUGINS as $name => $slugs ) {
+			if ( self::has_plugin( $slugs ) ) {
+				return $name;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The SEO title, description and focus keyword saved for each post, as
+	 * the SEO plugin stores them: a title can hold the plugin's own
+	 * placeholders (%%title%%, %sep%). Posts with none of the three are left
+	 * out.
+	 *
+	 * @param int[] $ids Post IDs.
+	 * @return array[] { title: string|null, description: string|null, focus_keyword: string|null } by post ID.
+	 */
+	private static function seo_for( array $ids ) {
+		global $wpdb;
+
+		$plugin = self::seo_plugin();
+		$ids    = array_filter( array_map( 'intval', $ids ) );
+		if ( null === $plugin || ! $ids ) {
+			return array();
+		}
+
+		$fields = array_flip( self::SEO_META_KEYS[ $plugin ] ); // Meta key => field.
+
+		$rows = $wpdb->get_results(
+			'SELECT post_id, meta_key, LEFT( meta_value, ' . ( self::SEO_MAX_LENGTH + 1 ) . " ) AS meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('" . implode( "', '", array_keys( $fields ) ) . "') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- The IDs are integers; the keys and the length are constants of this class.
+		);
+
+		$seo = array();
+		foreach ( (array) $rows as $row ) {
+			$id    = (int) $row->post_id;
+			$field = $fields[ (string) $row->meta_key ];
+			$value = self::clip( self::plain( $row->meta_value ), self::SEO_MAX_LENGTH );
+			if ( '' === $value || isset( $seo[ $id ][ $field ] ) ) {
+				continue; // Empty, or a second row for the same key: the oldest counts.
+			}
+			if ( ! isset( $seo[ $id ] ) ) {
+				$seo[ $id ] = array(
+					'title'         => null,
+					'description'   => null,
+					'focus_keyword' => null,
+				);
+			}
+			$seo[ $id ][ $field ] = $value;
+		}
+
+		return $seo;
+	}
+
+	/**
+	 * Text cut to a number of whole characters.
+	 *
+	 * @param string $text   Text.
+	 * @param int    $length Most characters kept.
+	 * @return string
+	 */
+	private static function clip( $text, $length ) {
+		$text = (string) wp_check_invalid_utf8( (string) $text, true );
+		return mb_strlen( $text ) > $length ? mb_substr( $text, 0, $length ) : $text;
+	}
+
+	/**
+	 * The public content types whose posts are listed: all but pages (listed
+	 * in full under "pages") and media. Sorted by name, so the order is the
+	 * same in every cron run of one inventory.
+	 *
+	 * @return string[]
+	 */
+	private static function listed_types() {
+		$types = array_values( array_diff( array_map( 'strval', array_keys( get_post_types( array( 'public' => true ) ) ) ), array( 'page', 'attachment' ) ) );
+		sort( $types );
+		return $types;
+	}
+
+	/**
+	 * The next batch of published posts of one content type, newest first
+	 * (highest ID first). No content, excerpt or author is read.
+	 *
+	 * @param string $type      Post type.
+	 * @param int    $before_id Lowest post ID already sent; 0 to start at the newest.
+	 * @param int    $limit     Most posts returned.
+	 * @return array[]
+	 */
+	private static function posts( $type, $before_id, $limit ) {
+		global $wpdb;
+
+		// post_author and the dates are only there for get_permalink(): they
+		// appear in the addresses of posts on some permalink settings.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT ID, post_title, post_name, post_parent, post_type, post_status, post_date, post_date_gmt, post_modified_gmt, post_author
+				FROM {$wpdb->posts}
+				WHERE post_type = %s AND post_status = 'publish' AND ( %d = 0 OR ID < %d )
+				ORDER BY ID DESC
+				LIMIT %d",
+				(string) $type,
+				(int) $before_id,
+				(int) $before_id,
+				(int) $limit
+			)
+		);
+
+		if ( ! $rows ) {
+			return array();
+		}
+
+		$ids = array();
+		foreach ( $rows as $row ) {
+			$ids[] = (int) $row->ID;
+		}
+
+		$seo       = self::seo_for( $ids );
+		$known     = self::translations_of( 'post_' . $type, $ids );
+		$languages = array();
+		foreach ( $rows as $index => $row ) {
+			$languages[ $index ] = isset( $known[ (int) $row->ID ] ) ? $known[ (int) $row->ID ]['language'] : null;
+		}
+
+		return self::each_in_language(
+			$rows,
+			$languages,
+			function ( $row, $language ) use ( $seo ) {
+				$id  = (int) $row->ID;
+				$url = get_permalink( self::bare_post( $row ) );
+
+				return array(
+					'id'           => $id,
+					'type'         => (string) $row->post_type,
+					'title'        => self::plain( $row->post_title ),
+					'slug'         => (string) $row->post_name,
+					'parent'       => (int) $row->post_parent,
+					'url'          => $url ? (string) $url : null,
+					'date_gmt'     => self::gmt( $row->post_date_gmt ),
+					'modified_gmt' => self::gmt( $row->post_modified_gmt ),
+					'language'     => $language,
+					'seo'          => isset( $seo[ $id ] ) ? $seo[ $id ] : null,
+				);
+			}
+		);
+	}
+
+	/**
+	 * A stored GMT date as ISO 8601, or null when the column is empty.
+	 *
+	 * @param string $date MySQL datetime.
+	 * @return string|null
+	 */
+	private static function gmt( $date ) {
+		$date = (string) $date;
+		return '' !== $date && 0 !== strpos( $date, '0000' ) ? str_replace( ' ', 'T', $date ) . 'Z' : null;
+	}
+
+	/**
+	 * One redirect rule in the shape that is sent.
+	 *
+	 * @param string      $origin  Where it was read from: one of REDIRECT_ORIGINS.
+	 * @param string      $source  Address or pattern that is redirected.
+	 * @param string      $match   exact, regex, contains, start or end.
+	 * @param string|null $target  Where it goes; null for a rule that only answers with a status (410).
+	 * @param int         $code    HTTP status.
+	 * @param bool        $enabled Whether the rule is switched on.
+	 * @return array
+	 */
+	private static function redirect( $origin, $source, $match, $target, $code, $enabled ) {
+		$target = null === $target ? '' : trim( (string) $target );
+		return array(
+			'source'  => self::clip( trim( (string) $source ), 2000 ),
+			'match'   => in_array( $match, array( 'exact', 'regex', 'contains', 'start', 'end' ), true ) ? $match : 'exact',
+			'target'  => '' !== $target ? self::clip( $target, 2000 ) : null,
+			'code'    => (int) $code,
+			'enabled' => (bool) $enabled,
+			'origin'  => (string) $origin,
+		);
+	}
+
+	/**
+	 * The next batch of redirect rules from one source.
+	 *
+	 * Sources: the Redirection plugin (its own table), Yoast SEO Premium (one
+	 * option), Rank Math (its own table) and SEOPress (one post per rule).
+	 * Each is read only while its plugin is active. Rules that do more than
+	 * send one address to another (Redirection's rules by login state,
+	 * referrer, browser and the like, or its "error" and "pass-through"
+	 * actions) are counted as skipped, not sent.
+	 *
+	 * @param string $origin One of REDIRECT_ORIGINS.
+	 * @param int    $after  Last row ID already read, for the sources read in batches.
+	 * @return array { in_use: bool, items: array[], skipped: int, after: int, done: bool }
+	 */
+	private static function redirect_batch( $origin, $after ) {
+		global $wpdb;
+
+		$result = array(
+			'in_use'  => false,
+			'items'   => array(),
+			'skipped' => 0,
+			'after'   => (int) $after,
+			'done'    => true,
+		);
+
+		switch ( $origin ) {
+			case 'redirection':
+				$table = $wpdb->prefix . 'redirection_items';
+				if ( ! self::has_plugin( array( 'redirection' ) ) || ! self::table_exists( $table ) ) {
+					return $result;
+				}
+				$rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT id, url, regex, status, action_type, action_code, action_data, match_type FROM {$table} WHERE id > %d ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+						(int) $after,
+						self::REDIRECT_BATCH
+					)
+				);
+				$result['in_use'] = true;
+				foreach ( (array) $rows as $row ) {
+					$result['after'] = (int) $row->id;
+					if ( 'url' !== $row->action_type || 'url' !== $row->match_type ) {
+						$result['skipped']++;
+						continue;
+					}
+					$result['items'][] = self::redirect( $origin, $row->url, (int) $row->regex ? 'regex' : 'exact', $row->action_data, $row->action_code, 'enabled' === $row->status );
+				}
+				$result['done'] = count( (array) $rows ) < self::REDIRECT_BATCH;
+				return $result;
+
+			case 'yoast-premium':
+				if ( ! self::has_plugin( array( 'wordpress-seo-premium' ) ) ) {
+					return $result;
+				}
+				$result['in_use'] = true;
+				if ( $after > 0 ) {
+					return $result; // Read in one go; a second call has nothing left.
+				}
+				$rules = get_option( 'wpseo-premium-redirects-base' );
+				foreach ( is_array( $rules ) ? $rules : array() as $rule ) {
+					if ( ! is_array( $rule ) || ! isset( $rule['origin'] ) || ! is_scalar( $rule['origin'] ) ) {
+						$result['skipped']++;
+						continue;
+					}
+					$result['items'][] = self::redirect(
+						$origin,
+						$rule['origin'],
+						isset( $rule['format'] ) && 'regex' === $rule['format'] ? 'regex' : 'exact',
+						isset( $rule['url'] ) && is_scalar( $rule['url'] ) ? $rule['url'] : null,
+						isset( $rule['type'] ) ? (int) $rule['type'] : 301,
+						true
+					);
+				}
+				$result['after'] = 1;
+				return $result;
+
+			case 'rank-math':
+				$table = $wpdb->prefix . 'rank_math_redirections';
+				if ( ! self::has_plugin( self::SEO_PLUGINS['rank-math'] ) || ! self::table_exists( $table ) ) {
+					return $result;
+				}
+				$rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT id, sources, url_to, header_code, status FROM {$table} WHERE id > %d AND status <> 'trashed' ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+						(int) $after,
+						self::REDIRECT_BATCH
+					)
+				);
+				$result['in_use'] = true;
+				foreach ( (array) $rows as $row ) {
+					$result['after'] = (int) $row->id;
+					$sources         = @unserialize( (string) $row->sources, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- Rank Math's own array, read without instantiating anything; a broken value is counted as skipped.
+					$listed          = 0;
+					foreach ( is_array( $sources ) ? $sources : array() as $source ) {
+						if ( ! is_array( $source ) || ! isset( $source['pattern'] ) || ! is_scalar( $source['pattern'] ) || '' === trim( (string) $source['pattern'] ) ) {
+							continue;
+						}
+						$result['items'][] = self::redirect( $origin, $source['pattern'], isset( $source['comparison'] ) ? (string) $source['comparison'] : 'exact', $row->url_to, $row->header_code, 'active' === $row->status );
+						$listed++;
+					}
+					if ( ! $listed ) {
+						$result['skipped']++;
+					}
+				}
+				$result['done'] = count( (array) $rows ) < self::REDIRECT_BATCH;
+				return $result;
+
+			case 'seopress':
+				if ( ! self::has_plugin( self::SEO_PLUGINS['seopress'] ) ) {
+					return $result;
+				}
+				// One post per rule, of the same type as SEOPress's log of
+				// 404s; only the ones that carry a target are rules.
+				$rows = $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT p.ID, p.post_title, p.post_status, MIN( LEFT( m.meta_value, 2001 ) ) AS target
+						FROM {$wpdb->posts} p
+						INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = '_seopress_redirections_value' AND m.meta_value <> ''
+						WHERE p.post_type = 'seopress_404' AND p.post_status IN ( 'publish', 'draft' ) AND p.ID > %d
+						GROUP BY p.ID
+						ORDER BY p.ID ASC
+						LIMIT %d",
+						(int) $after,
+						self::REDIRECT_BATCH
+					)
+				);
+				$result['in_use'] = (bool) $rows || $after > 0;
+				$ids              = array();
+				foreach ( (array) $rows as $row ) {
+					$ids[] = (int) $row->ID;
+				}
+				$meta = array();
+				if ( $ids ) {
+					$meta_rows = $wpdb->get_results(
+						"SELECT post_id, meta_key, LEFT( meta_value, 20 ) AS meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('_seopress_redirections_type', '_seopress_redirections_enabled', '_seopress_redirections_enabled_regex') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- The IDs are integers from the query above.
+					);
+					foreach ( (array) $meta_rows as $meta_row ) {
+						if ( ! isset( $meta[ (int) $meta_row->post_id ][ (string) $meta_row->meta_key ] ) ) {
+							$meta[ (int) $meta_row->post_id ][ (string) $meta_row->meta_key ] = (string) $meta_row->meta_value;
+						}
+					}
+				}
+				foreach ( (array) $rows as $row ) {
+					$id                = (int) $row->ID;
+					$rule              = isset( $meta[ $id ] ) ? $meta[ $id ] : array();
+					$result['after']   = $id;
+					$result['items'][] = self::redirect(
+						$origin,
+						$row->post_title,
+						isset( $rule['_seopress_redirections_enabled_regex'] ) && 'yes' === $rule['_seopress_redirections_enabled_regex'] ? 'regex' : 'exact',
+						$row->target,
+						isset( $rule['_seopress_redirections_type'] ) ? (int) $rule['_seopress_redirections_type'] : 301,
+						'publish' === $row->post_status && isset( $rule['_seopress_redirections_enabled'] ) && 'yes' === $rule['_seopress_redirections_enabled']
+					);
+				}
+				$result['done'] = count( (array) $rows ) < self::REDIRECT_BATCH;
+				return $result;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * The forms of one form plugin, or an empty list when it is not active.
+	 *
+	 * Each form: which plugin, its ID there, its title, whether it is switched
+	 * on, its fields (label and type, never a value), its notification emails
+	 * (who they go to) and the published posts that embed it. Entries are
+	 * never read.
+	 *
+	 * @param string $origin One of FORM_ORIGINS.
+	 * @return array[]
+	 */
+	private static function forms( $origin ) {
+		switch ( $origin ) {
+			case 'gravityforms':
+				return self::has_plugin( array( 'gravityforms' ) ) ? self::forms_gravity() : array();
+			case 'formidable':
+				return self::has_plugin( array( 'formidable', 'formidable-pro' ) ) ? self::forms_formidable() : array();
+			case 'wpforms':
+				return self::has_plugin( array( 'wpforms-lite', 'wpforms' ) ) ? self::forms_wpforms() : array();
+			case 'contact-form-7':
+				return self::has_plugin( array( 'contact-form-7' ) ) ? self::forms_cf7() : array();
+			case 'elementor':
+				return self::has_plugin( array( 'elementor-pro', 'pro-elements' ) ) ? self::forms_elementor() : array();
+		}
+		return array();
+	}
+
+	/**
+	 * One form in the shape that is sent.
+	 *
+	 * @param string  $plugin        One of FORM_ORIGINS.
+	 * @param string  $id            The form's ID in its plugin.
+	 * @param string  $title         Form title.
+	 * @param bool    $active        Whether the form is switched on.
+	 * @param array[] $fields        From field(), or null when they are not stored.
+	 * @param array[] $notifications From notification().
+	 * @param array[] $embedded_on   { id, type } of the posts that embed it.
+	 * @return array
+	 */
+	private static function form( $plugin, $id, $title, $active, $fields, array $notifications, array $embedded_on ) {
+		return array(
+			'plugin'        => (string) $plugin,
+			'id'            => (string) $id,
+			'title'         => self::clip( self::plain( $title ), 200 ),
+			'active'        => (bool) $active,
+			'fields'        => is_array( $fields ) ? array_slice( $fields, 0, self::FIELDS_PER_FORM ) : null,
+			'notifications' => array_slice( $notifications, 0, 20 ),
+			'embedded_on'   => array_slice( $embedded_on, 0, self::EMBEDS_PER_FORM ),
+		);
+	}
+
+	/**
+	 * One form field in the shape that is sent.
+	 *
+	 * @param string $label    What the visitor sees next to the field (or the field's name where there is no label).
+	 * @param string $type     The plugin's own name for the kind of field.
+	 * @param bool   $required Whether it must be filled in.
+	 * @return array
+	 */
+	private static function field( $label, $type, $required ) {
+		return array(
+			'label'    => self::clip( self::plain( is_scalar( $label ) ? $label : '' ), 200 ),
+			'type'     => self::clip( is_scalar( $type ) ? (string) $type : '', 60 ),
+			'required' => (bool) $required,
+		);
+	}
+
+	/**
+	 * One notification email in the shape that is sent.
+	 *
+	 * @param string $name   The notification's name in the form plugin.
+	 * @param bool   $active Whether it is switched on.
+	 * @param mixed  $to     Recipients as the plugin stores them: a string or a list of strings.
+	 * @return array
+	 */
+	private static function notification( $name, $active, $to ) {
+		return array(
+			'name'   => self::clip( self::plain( is_scalar( $name ) ? $name : '' ), 200 ),
+			'active' => (bool) $active,
+			'to'     => self::recipients( $to ),
+		);
+	}
+
+	/**
+	 * Recipients as a list. The form plugins' placeholders for the site's
+	 * admin email are replaced by that address; any other placeholder (the
+	 * visitor's own email field, usually) is left as written, so the reader
+	 * can tell it from a fixed address.
+	 *
+	 * @param mixed $raw A string with one or more recipients, or a list of such strings.
+	 * @return string[]
+	 */
+	private static function recipients( $raw ) {
+		$parts = array();
+		foreach ( (array) $raw as $value ) {
+			if ( is_scalar( $value ) ) {
+				$parts = array_merge( $parts, (array) preg_split( '/[,;\r\n]+/', (string) $value ) );
+			}
+		}
+
+		$admin = (string) get_option( 'admin_email' );
+		$list  = array();
+		foreach ( $parts as $part ) {
+			$part = trim( str_ireplace( array( '{admin_email}', '[admin_email]', '[_site_admin_email]' ), $admin, (string) $part ) );
+			if ( '' !== $part ) {
+				$list[] = self::clip( self::plain( $part ), 200 );
+			}
+		}
+
+		return array_slice( array_values( array_unique( $list ) ), 0, 20 );
+	}
+
+	/**
+	 * Stored JSON, or a serialized array from an older version of a form
+	 * plugin, as an array. Anything else is an empty array.
+	 *
+	 * @param mixed $value Raw column or post content.
+	 * @return array
+	 */
+	private static function decode( $value ) {
+		if ( ! is_string( $value ) || '' === $value ) {
+			return array();
+		}
+		$data = json_decode( $value, true );
+		if ( ! is_array( $data ) ) {
+			$data = json_decode( wp_unslash( $value ), true );
+		}
+		if ( ! is_array( $data ) && is_serialized( $value ) ) {
+			$data = @unserialize( trim( $value ), array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- A form plugin's own array, read without instantiating anything; a broken value is simply empty.
+		}
+		return is_array( $data ) ? $data : array();
+	}
+
+	/**
+	 * Gravity Forms: forms and their settings are in its own two tables.
+	 *
+	 * @return array[]
+	 */
+	private static function forms_gravity() {
+		global $wpdb;
+
+		$forms_table = $wpdb->prefix . 'gf_form';
+		$meta_table  = $wpdb->prefix . 'gf_form_meta';
+		if ( ! self::table_exists( $forms_table ) || ! self::table_exists( $meta_table ) ) {
+			return array();
+		}
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, title, is_active FROM {$forms_table} WHERE is_trash = 0 ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+				self::FORMS_PER_PLUGIN
+			)
+		);
+		if ( ! $rows ) {
+			return array();
+		}
+
+		$embeds = self::embeds(
+			array( '[gravityform', 'wp:gravityforms/form' ),
+			array(
+				'/\[gravityforms?\b[^\]]*?\bid\s*=\s*["\']?(\d+)/i',
+				'/wp:gravityforms\/form\s*\{[^}]*?"formId"\s*:\s*"?(\d+)/',
+			)
+		);
+
+		$forms = array();
+
+		foreach ( $rows as $row ) {
+			$id   = (int) $row->id;
+			$meta = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT display_meta, notifications FROM {$meta_table} WHERE form_id = %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+					$id
+				)
+			);
+
+			$display = $meta ? self::decode( $meta->display_meta ) : array();
+			$fields  = array();
+			foreach ( isset( $display['fields'] ) && is_array( $display['fields'] ) ? $display['fields'] : array() as $field ) {
+				if ( ! is_array( $field ) ) {
+					continue;
+				}
+				$label    = isset( $field['label'] ) && '' !== $field['label'] ? $field['label'] : ( isset( $field['adminLabel'] ) ? $field['adminLabel'] : '' );
+				$fields[] = self::field( $label, isset( $field['type'] ) ? $field['type'] : '', ! empty( $field['isRequired'] ) );
+			}
+
+			$notifications = array();
+			foreach ( $meta ? self::decode( $meta->notifications ) : array() as $notification ) {
+				if ( ! is_array( $notification ) ) {
+					continue;
+				}
+				$kind = isset( $notification['toType'] ) ? (string) $notification['toType'] : 'email';
+				if ( 'routing' === $kind ) {
+					// Sent to one of several addresses, chosen by an answer. Only the addresses are read.
+					$to = array();
+					foreach ( isset( $notification['routing'] ) && is_array( $notification['routing'] ) ? $notification['routing'] : array() as $route ) {
+						if ( is_array( $route ) && isset( $route['email'] ) ) {
+							$to[] = $route['email'];
+						}
+					}
+				} elseif ( 'field' === $kind ) {
+					// Sent to the address the visitor types into one of the form's fields.
+					$to = '{field:' . ( isset( $notification['toField'] ) && is_scalar( $notification['toField'] ) ? (string) $notification['toField'] : '' ) . '}';
+				} else {
+					$to = isset( $notification['to'] ) && '' !== $notification['to'] ? $notification['to'] : ( isset( $notification['toEmail'] ) ? $notification['toEmail'] : '' );
+				}
+				$notifications[] = self::notification(
+					isset( $notification['name'] ) ? $notification['name'] : '',
+					! isset( $notification['isActive'] ) || $notification['isActive'],
+					$to
+				);
+			}
+
+			$forms[] = self::form( 'gravityforms', $id, $row->title, (int) $row->is_active, $fields, $notifications, isset( $embeds[ (string) $id ] ) ? $embeds[ (string) $id ] : array() );
+		}
+
+		return $forms;
+	}
+
+	/**
+	 * Formidable Forms: forms and fields are in its own tables, and each
+	 * email it sends is a post of type frm_form_actions.
+	 *
+	 * @return array[]
+	 */
+	private static function forms_formidable() {
+		global $wpdb;
+
+		$forms_table  = $wpdb->prefix . 'frm_forms';
+		$fields_table = $wpdb->prefix . 'frm_fields';
+		if ( ! self::table_exists( $forms_table ) || ! self::table_exists( $fields_table ) ) {
+			return array();
+		}
+
+		// Templates are not forms on the site, and a form with a parent is a
+		// repeating section of that parent.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, form_key, name, status FROM {$forms_table} WHERE is_template = 0 AND ( parent_form_id IS NULL OR parent_form_id = 0 ) AND status IN ( 'published', 'draft' ) ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name.
+				self::FORMS_PER_PLUGIN
+			)
+		);
+		if ( ! $rows ) {
+			return array();
+		}
+
+		$ids  = array();
+		$keys = array(); // A shortcode can name a form by its key instead of its ID.
+		foreach ( $rows as $row ) {
+			$ids[]                                         = (int) $row->id;
+			$keys[ strtolower( (string) $row->form_key ) ] = (string) (int) $row->id;
+		}
+		$in = implode( ',', $ids );
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- The table name is the prefix plus a fixed name; the IDs are integers.
+		$fields = array();
+		foreach ( (array) $wpdb->get_results( "SELECT form_id, name, type, required FROM {$fields_table} WHERE form_id IN ($in) ORDER BY form_id ASC, field_order ASC, id ASC" ) as $field ) {
+			$fields[ (int) $field->form_id ][] = self::field( $field->name, $field->type, (int) $field->required );
+		}
+
+		$notifications = array();
+		foreach ( (array) $wpdb->get_results( "SELECT post_title, post_status, menu_order, post_content FROM {$wpdb->posts} WHERE post_type = 'frm_form_actions' AND post_excerpt = 'email' AND post_status IN ( 'publish', 'draft' ) AND menu_order IN ($in) ORDER BY ID ASC" ) as $action ) {
+			$settings                                     = self::decode( $action->post_content );
+			$notifications[ (int) $action->menu_order ][] = self::notification( $action->post_title, 'publish' === $action->post_status, isset( $settings['email_to'] ) ? $settings['email_to'] : '' );
+		}
+		// phpcs:enable
+
+		$embeds = self::embeds(
+			array( '[formidable', 'wp:formidable/simple-form' ),
+			array(
+				'/\[formidable\b[^\]]*?\bid\s*=\s*["\']?([A-Za-z0-9_-]+)/i',
+				'/wp:formidable\/simple-form\s*\{[^}]*?"formId"\s*:\s*"?(\d+)/',
+			),
+			$keys
+		);
+
+		$forms = array();
+		foreach ( $rows as $row ) {
+			$id      = (int) $row->id;
+			$forms[] = self::form(
+				'formidable',
+				$id,
+				$row->name,
+				'published' === $row->status,
+				isset( $fields[ $id ] ) ? $fields[ $id ] : array(),
+				isset( $notifications[ $id ] ) ? $notifications[ $id ] : array(),
+				isset( $embeds[ (string) $id ] ) ? $embeds[ (string) $id ] : array()
+			);
+		}
+
+		return $forms;
+	}
+
+	/**
+	 * WPForms: each form is a post of type wpforms whose content is the
+	 * form's settings as JSON.
+	 *
+	 * @return array[]
+	 */
+	private static function forms_wpforms() {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE post_type = 'wpforms' AND post_status = 'publish' ORDER BY ID ASC LIMIT %d",
+				self::FORMS_PER_PLUGIN
+			)
+		);
+		if ( ! $rows ) {
+			return array();
+		}
+
+		$embeds = self::embeds(
+			array( '[wpforms', 'wp:wpforms/form-selector' ),
+			array(
+				'/\[wpforms\b[^\]]*?\bid\s*=\s*["\']?(\d+)/i',
+				'/wp:wpforms\/form-selector\s*\{[^}]*?"formId"\s*:\s*"?(\d+)/',
+			)
+		);
+
+		$forms = array();
+
+		foreach ( $rows as $row ) {
+			$id       = (int) $row->ID;
+			$data     = self::decode( $row->post_content );
+			$settings = isset( $data['settings'] ) && is_array( $data['settings'] ) ? $data['settings'] : array();
+
+			$fields = array();
+			foreach ( isset( $data['fields'] ) && is_array( $data['fields'] ) ? $data['fields'] : array() as $field ) {
+				if ( is_array( $field ) ) {
+					$fields[] = self::field( isset( $field['label'] ) ? $field['label'] : '', isset( $field['type'] ) ? $field['type'] : '', ! empty( $field['required'] ) );
+				}
+			}
+
+			// One switch for the whole form, and one per notification that counts as on unless it says 0.
+			$enabled       = ! empty( $settings['notification_enable'] );
+			$notifications = array();
+			foreach ( isset( $settings['notifications'] ) && is_array( $settings['notifications'] ) ? $settings['notifications'] : array() as $notification ) {
+				if ( is_array( $notification ) ) {
+					$notifications[] = self::notification(
+						isset( $notification['notification_name'] ) ? $notification['notification_name'] : '',
+						$enabled && ( ! isset( $notification['enable'] ) || $notification['enable'] ),
+						isset( $notification['email'] ) ? $notification['email'] : ''
+					);
+				}
+			}
+			if ( ! $notifications && ! empty( $settings['notification_email'] ) ) {
+				$notifications[] = self::notification( '', $enabled, $settings['notification_email'] ); // The single address older forms keep, which WPForms itself still falls back to.
+			}
+
+			$title   = isset( $settings['form_title'] ) && is_scalar( $settings['form_title'] ) && '' !== (string) $settings['form_title'] ? $settings['form_title'] : $row->post_title;
+			$forms[] = self::form( 'wpforms', $id, $title, true, $fields, $notifications, isset( $embeds[ (string) $id ] ) ? $embeds[ (string) $id ] : array() );
+		}
+
+		return $forms;
+	}
+
+	/**
+	 * Contact Form 7: each form is a post of type wpcf7_contact_form, with
+	 * its template and its two emails in post meta. A field has no label of
+	 * its own, so its name stands in.
+	 *
+	 * @return array[]
+	 */
+	private static function forms_cf7() {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT ID, post_title FROM {$wpdb->posts} WHERE post_type = 'wpcf7_contact_form' AND post_status = 'publish' ORDER BY ID ASC LIMIT %d",
+				self::FORMS_PER_PLUGIN
+			)
+		);
+		if ( ! $rows ) {
+			return array();
+		}
+
+		$ids = array();
+		foreach ( $rows as $row ) {
+			$ids[] = (int) $row->ID;
+		}
+
+		$meta      = array();
+		$meta_rows = $wpdb->get_results(
+			"SELECT post_id, meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id IN (" . implode( ',', $ids ) . ") AND meta_key IN ('_form', '_mail', '_mail_2', '_hash') ORDER BY meta_id ASC" // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- The IDs are integers from the query above.
+		);
+		foreach ( (array) $meta_rows as $meta_row ) {
+			if ( ! isset( $meta[ (int) $meta_row->post_id ][ (string) $meta_row->meta_key ] ) ) {
+				$meta[ (int) $meta_row->post_id ][ (string) $meta_row->meta_key ] = (string) $meta_row->meta_value;
+			}
+		}
+
+		// Since Contact Form 7 5.8 a shortcode names its form by the start of
+		// the form's hash; older ones use the post ID.
+		$hashes = array();
+		foreach ( $ids as $id ) {
+			if ( isset( $meta[ $id ]['_hash'] ) && '' !== $meta[ $id ]['_hash'] ) {
+				$hashes[ strtolower( $meta[ $id ]['_hash'] ) ] = (string) $id;
+			}
+		}
+
+		$found = self::embeds(
+			array( '[contact-form-7', 'wp:contact-form-7/contact-form-selector' ),
+			array(
+				'/\[contact-form-7\b[^\]]*?\bid\s*=\s*["\']?([0-9a-f]+)/i',
+				'/wp:contact-form-7\/contact-form-selector\s*\{[^}]*?"id"\s*:\s*"?(\d+)/',
+			)
+		);
+
+		$embeds = array();
+		foreach ( $found as $ref => $posts ) {
+			$ref    = strtolower( (string) $ref );
+			$target = null;
+			if ( ctype_digit( $ref ) && in_array( (int) $ref, $ids, true ) ) {
+				$target = (string) (int) $ref;
+			} elseif ( strlen( $ref ) >= 7 ) {
+				foreach ( $hashes as $hash => $form_id ) {
+					if ( 0 === strpos( $hash, $ref ) ) {
+						$target = $form_id;
+						break;
+					}
+				}
+			}
+			if ( null !== $target ) {
+				$embeds[ $target ] = self::merge_embeds( isset( $embeds[ $target ] ) ? $embeds[ $target ] : array(), $posts );
+			}
+		}
+
+		$forms = array();
+
+		foreach ( $rows as $row ) {
+			$id     = (int) $row->ID;
+			$fields = array();
+
+			// Form tags: [type name options...] with a * on the type when
+			// required. A tag without a name (submit) is not a field.
+			if ( isset( $meta[ $id ]['_form'] ) && preg_match_all( '/\[([a-zA-Z][0-9a-zA-Z:._-]*?)(\*?)\s+([a-zA-Z][0-9a-zA-Z:._-]*)(?=[\s\]])/', $meta[ $id ]['_form'], $tags, PREG_SET_ORDER ) ) {
+				foreach ( $tags as $tag ) {
+					if ( ! in_array( strtolower( $tag[1] ), array( 'submit', 'response' ), true ) ) {
+						$fields[] = self::field( $tag[3], strtolower( $tag[1] ), '*' === $tag[2] );
+					}
+				}
+			}
+
+			$notifications = array();
+			foreach ( array(
+				'_mail'   => 'Mail',
+				'_mail_2' => 'Mail (2)',
+			) as $key => $name ) {
+				$mail = isset( $meta[ $id ][ $key ] ) ? self::decode( $meta[ $id ][ $key ] ) : array();
+				if ( ! $mail || ! isset( $mail['recipient'] ) ) {
+					continue;
+				}
+				// The first mail is always sent; the second only when switched on.
+				$notifications[] = self::notification( $name, '_mail' === $key || ! empty( $mail['active'] ), $mail['recipient'] );
+			}
+
+			$forms[] = self::form( 'contact-form-7', $id, $row->post_title, true, $fields, $notifications, isset( $embeds[ (string) $id ] ) ? $embeds[ (string) $id ] : array() );
+		}
+
+		return $forms;
+	}
+
+	/**
+	 * Elementor Pro (and PRO Elements) forms: a form is a widget inside a
+	 * page's or template's layout, so each layout that holds one is read, one
+	 * at a time, and only its form widgets are looked at.
+	 *
+	 * Elementor saves only what differs from its defaults. A form whose
+	 * fields were never changed has none stored: its "fields" is null, and it
+	 * shows Elementor's default Name, Email and Message fields.
+	 *
+	 * @return array[]
+	 */
+	private static function forms_elementor() {
+		global $wpdb;
+
+		$types = self::embed_types();
+		if ( ! $types ) {
+			return array();
+		}
+
+		$posts = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT p.ID, p.post_type, m.meta_id, LENGTH( m.meta_value ) AS bytes
+				FROM {$wpdb->postmeta} m
+				INNER JOIN {$wpdb->posts} p ON p.ID = m.post_id
+				WHERE m.meta_key = '_elementor_data' AND p.post_status = 'publish' AND p.post_type IN ('" . implode( "', '", $types ) . "') AND m.meta_value LIKE %s
+				ORDER BY p.ID ASC
+				LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.QuotedDynamicPlaceholderGeneration -- The post types went through esc_sql() in embed_types().
+				'%' . $wpdb->esc_like( '"widgetType":"form"' ) . '%',
+				self::EMBED_SCAN_POSTS
+			)
+		);
+
+		$forms   = array();
+		$seen    = array();
+		$too_big = 0;
+
+		foreach ( (array) $posts as $post ) {
+			if ( count( $forms ) >= self::FORMS_PER_PLUGIN || isset( $seen[ (int) $post->ID ] ) ) {
+				continue;
+			}
+			$seen[ (int) $post->ID ] = true;
+
+			if ( (int) $post->bytes > self::EMBED_MAX_BYTES ) {
+				$too_big++;
+				continue;
+			}
+
+			$layout = json_decode( (string) $wpdb->get_var( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_id = %d", (int) $post->meta_id ) ), true );
+			if ( ! is_array( $layout ) ) {
+				continue;
+			}
+
+			$widgets = array();
+			self::elementor_forms( $layout, $widgets, 0 );
+			unset( $layout );
+
+			foreach ( $widgets as $widget ) {
+				$forms[] = self::elementor_form( $widget, (int) $post->ID, (string) $post->post_type );
+			}
+		}
+
+		if ( $too_big ) {
+			self::note( $too_big . ' Elementor layouts with a form were too large to read, so their forms are not listed.' );
+		}
+
+		return array_slice( $forms, 0, self::FORMS_PER_PLUGIN );
+	}
+
+	/**
+	 * One Elementor form widget as a form.
+	 *
+	 * @param array  $widget    The widget element from the layout.
+	 * @param int    $post_id   The page or template whose layout holds it.
+	 * @param string $post_type That post's type.
+	 * @return array
+	 */
+	private static function elementor_form( array $widget, $post_id, $post_type ) {
+		$settings = isset( $widget['settings'] ) && is_array( $widget['settings'] ) ? $widget['settings'] : array();
+
+		$fields = null;
+		if ( isset( $settings['form_fields'] ) && is_array( $settings['form_fields'] ) ) {
+			$fields = array();
+			foreach ( $settings['form_fields'] as $field ) {
+				if ( ! is_array( $field ) ) {
+					continue;
+				}
+				$label = '';
+				foreach ( array( 'field_label', 'placeholder', 'custom_id' ) as $key ) {
+					if ( isset( $field[ $key ] ) && is_scalar( $field[ $key ] ) && '' !== (string) $field[ $key ] ) {
+						$label = $field[ $key ];
+						break;
+					}
+				}
+				// A text field has no type stored: it is the default.
+				$fields[] = self::field( $label, isset( $field['field_type'] ) && '' !== $field['field_type'] ? $field['field_type'] : 'text', ! empty( $field['required'] ) && 'false' !== $field['required'] );
+			}
+		}
+
+		// Without stored actions the form sends one email, to the site's
+		// admin address: Elementor's defaults.
+		$actions       = isset( $settings['submit_actions'] ) && is_array( $settings['submit_actions'] ) ? $settings['submit_actions'] : array( 'email' );
+		$notifications = array();
+		if ( in_array( 'email', $actions, true ) ) {
+			$notifications[] = self::notification( 'Email', true, isset( $settings['email_to'] ) && is_scalar( $settings['email_to'] ) && '' !== (string) $settings['email_to'] ? $settings['email_to'] : '{admin_email}' );
+		}
+		if ( in_array( 'email2', $actions, true ) ) {
+			$notifications[] = self::notification( 'Email 2', true, isset( $settings['email_to_2'] ) ? $settings['email_to_2'] : '' );
+		}
+
+		return self::form(
+			'elementor',
+			isset( $widget['id'] ) && is_scalar( $widget['id'] ) ? (string) $widget['id'] : '',
+			isset( $settings['form_name'] ) && is_scalar( $settings['form_name'] ) ? $settings['form_name'] : '',
+			true,
+			$fields,
+			$notifications,
+			array(
+				array(
+					'id'   => (int) $post_id,
+					'type' => (string) $post_type,
+				),
+			)
+		);
+	}
+
+	/**
+	 * Collect the form widgets in an Elementor layout.
+	 *
+	 * @param array $elements Elements at one level of the layout.
+	 * @param array $found    Form widgets found so far; added to.
+	 * @param int   $depth    How deep this level is; a guard against a layout that loops.
+	 */
+	private static function elementor_forms( array $elements, array &$found, $depth ) {
+		if ( $depth > 30 ) {
+			return;
+		}
+		foreach ( $elements as $element ) {
+			if ( ! is_array( $element ) ) {
+				continue;
+			}
+			if ( isset( $element['widgetType'] ) && 'form' === $element['widgetType'] ) {
+				$found[] = $element;
+			}
+			if ( ! empty( $element['elements'] ) && is_array( $element['elements'] ) ) {
+				self::elementor_forms( $element['elements'], $found, $depth + 1 );
+			}
+		}
+	}
+
+	/**
+	 * The public content types looked at when finding where forms are
+	 * embedded, ready for a query: every public type but media.
+	 *
+	 * @return string[]
+	 */
+	private static function embed_types() {
+		$types = array();
+		foreach ( array_keys( get_post_types( array( 'public' => true ) ) ) as $type ) {
+			if ( 'attachment' !== $type ) {
+				$types[] = esc_sql( (string) $type );
+			}
+		}
+		return $types;
+	}
+
+	/**
+	 * Which published posts embed which form.
+	 *
+	 * Looks in post content (shortcodes and blocks, which is also where
+	 * WPBakery, Divi and Avada keep theirs) and in Elementor layouts
+	 * (shortcode widgets). The database finds the posts that hold one of the
+	 * markers; only those are read, a few at a time, to pick out the form's
+	 * ID, and nothing else of them is kept. A form placed by a sidebar
+	 * widget, a theme file or a pop-up plugin is not found.
+	 *
+	 * @param string[] $needles  Markers, e.g. '[gravityform'.
+	 * @param string[] $patterns Regular expressions whose first group is the form's ID or key.
+	 * @param string[] $aliases  Form ID by lower-case key, for plugins whose shortcode may use either.
+	 * @return array[] List of { id, type } by form ID (as a string).
+	 */
+	private static function embeds( array $needles, array $patterns, array $aliases = array() ) {
+		global $wpdb;
+
+		$types = self::embed_types();
+		if ( ! $types || ! $needles ) {
+			return array();
+		}
+		$in_types = "'" . implode( "', '", $types ) . "'";
+
+		$content_like = array();
+		$meta_like    = array();
+		$values       = array();
+		foreach ( $needles as $needle ) {
+			$content_like[] = 'p.post_content LIKE %s';
+			$meta_like[]    = 'm.meta_value LIKE %s';
+			$values[]       = '%' . $wpdb->esc_like( $needle ) . '%';
+		}
+
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- The post types went through esc_sql(); the LIKE clauses are built from placeholders only.
+		$in_content = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT p.ID, p.post_type, LENGTH( p.post_content ) AS bytes FROM {$wpdb->posts} p WHERE p.post_status = 'publish' AND p.post_type IN ($in_types) AND ( " . implode( ' OR ', $content_like ) . ' ) ORDER BY p.ID ASC LIMIT %d',
+				array_merge( $values, array( self::EMBED_SCAN_POSTS ) )
+			)
+		);
+		$in_layout  = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT p.ID, p.post_type, m.meta_id, LENGTH( m.meta_value ) AS bytes FROM {$wpdb->postmeta} m INNER JOIN {$wpdb->posts} p ON p.ID = m.post_id WHERE m.meta_key = '_elementor_data' AND p.post_status = 'publish' AND p.post_type IN ($in_types) AND ( " . implode( ' OR ', $meta_like ) . ' ) ORDER BY p.ID ASC LIMIT %d',
+				array_merge( $values, array( self::EMBED_SCAN_POSTS ) )
+			)
+		);
+		// phpcs:enable
+
+		$embeds = array();
+
+		$collect = function ( $post, $text ) use ( &$embeds, $patterns, $aliases ) {
+			// Elementor keeps a shortcode inside JSON, with its quotes escaped.
+			$text = str_replace( '\\', '', (string) $text );
+			foreach ( $patterns as $pattern ) {
+				if ( ! preg_match_all( $pattern, $text, $matches ) ) {
+					continue;
+				}
+				foreach ( $matches[1] as $ref ) {
+					$ref = strtolower( (string) $ref );
+					$ref = isset( $aliases[ $ref ] ) ? $aliases[ $ref ] : $ref;
+					if ( ctype_digit( $ref ) ) {
+						$ref = (string) (int) $ref; // "07" and "7" are one form.
+					}
+					$embeds[ $ref ] = self::merge_embeds(
+						isset( $embeds[ $ref ] ) ? $embeds[ $ref ] : array(),
+						array(
+							array(
+								'id'   => (int) $post->ID,
+								'type' => (string) $post->post_type,
+							),
+						)
+					);
+				}
+			}
+		};
+
+		foreach ( (array) $in_content as $post ) {
+			if ( (int) $post->bytes <= self::EMBED_MAX_BYTES ) {
+				$collect( $post, $wpdb->get_var( $wpdb->prepare( "SELECT post_content FROM {$wpdb->posts} WHERE ID = %d", (int) $post->ID ) ) );
+			}
+		}
+		foreach ( (array) $in_layout as $post ) {
+			if ( (int) $post->bytes <= self::EMBED_MAX_BYTES ) {
+				$collect( $post, $wpdb->get_var( $wpdb->prepare( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_id = %d", (int) $post->meta_id ) ) );
+			}
+		}
+
+		return $embeds;
+	}
+
+	/**
+	 * Add posts to a form's list of embedding posts, once each.
+	 *
+	 * @param array[] $list  { id, type } entries so far.
+	 * @param array[] $posts Entries to add.
+	 * @return array[]
+	 */
+	private static function merge_embeds( array $list, array $posts ) {
+		$have = array();
+		foreach ( $list as $entry ) {
+			$have[ (int) $entry['id'] ] = true;
+		}
+		foreach ( $posts as $entry ) {
+			if ( ! isset( $have[ (int) $entry['id'] ] ) && count( $list ) < self::EMBEDS_PER_FORM ) {
+				$list[]                     = $entry;
+				$have[ (int) $entry['id'] ] = true;
+			}
+		}
+		return $list;
 	}
 
 	/**
